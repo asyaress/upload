@@ -1,0 +1,23 @@
+{
+  "name": "nota-design-order-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^5.34.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-session": "^1.19.0",
+    "googleapis": "^178.0.0",
+    "ioredis": "^5.4.2",
+    "multer": "^2.3.0",
+    "mysql2": "^3.11.5",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0"
+  }
+}
