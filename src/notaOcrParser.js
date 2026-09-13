@@ -118,6 +118,24 @@ function isHeaderOrFooterLine(line) {
     || /^"Head Office/i.test(line);
 }
 
+function isFileNameContinuationLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/^Total\s*:/i.test(trimmed)) return false;
+  if (isMashedPriceLine(trimmed)) return false;
+  if (/^Ukuran\s*=/i.test(trimmed)) return false;
+  if (/^Nama\s+File\s*:/i.test(trimmed)) return false;
+  if (/^Finishing/i.test(trimmed)) return false;
+  if (/^ProdukHargaQtyTotal$/i.test(trimmed)) return false;
+
+  // Spesifikasi file yang sering ditulis di baris setelah "Nama File"
+  if (/^\d+\s*x\s*\d+/i.test(trimmed)) return true;
+  if (/@\d+\s*pcs?/i.test(trimmed)) return true;
+  if (/^[\d\s.x@,+/-]+$/i.test(trimmed) && trimmed.length <= 48) return true;
+
+  return false;
+}
+
 function extractProductSection(text) {
   const match = text.match(/ProdukHargaQtyTotal([\s\S]*?)(?:\nTotal\s*:|$)/i);
   return match?.[1] || '';
@@ -192,6 +210,12 @@ function extractItems(section) {
     if (index < lines.length && /^Nama\s+File\s*:/i.test(lines[index])) {
       fileNameHint = lines[index].replace(/^Nama\s+File\s*:\s*/i, '').trim() || null;
       index += 1;
+
+      while (index < lines.length && isFileNameContinuationLine(lines[index])) {
+        const continuation = lines[index].trim();
+        fileNameHint = fileNameHint ? `${fileNameHint} ${continuation}` : continuation;
+        index += 1;
+      }
     }
 
     const productType = productLines.join(' ').replace(/\s+/g, ' ').trim();
