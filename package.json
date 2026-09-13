@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "google:auth": "node scripts/google-oauth-setup.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -17,7 +18,10 @@
     "ioredis": "^5.4.2",
     "multer": "^2.3.0",
     "mysql2": "^3.11.5",
+    "pdf-parse": "^1.1.1",
+    "pdf-to-png-converter": "^4.2.1",
     "qrcode": "^1.5.4",
-    "speakeasy": "^2.0.0"
+    "speakeasy": "^2.0.0",
+    "tesseract.js": "^7.0.0"
   }
 }

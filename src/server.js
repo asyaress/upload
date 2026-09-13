@@ -16,11 +16,26 @@ import {
   verifyTotpCode
 } from './auth.js';
 import { getOrderDetail, getUserById, initializeDatabase, listRecentOrders, markOrderFailed } from './db.js';
+import { prepareNotaCopyForOcr } from './notaOcrService.js';
+import { previewNotaFromPath } from './notaPreviewService.js';
 import { createOrderForBackgroundUpload, parseAndValidateUpload } from './orderService.js';
-import { enqueueOrderUploadJob, getOrderUploadJobStatus, startOrderUploadWorker } from './uploadQueue.js';
+import {
+  enqueueNotaOcrJob,
+  enqueueOrderUploadJob,
+  getNotaOcrJobStatus,
+  getOrderUploadJobStatus,
+  startNotaOcrWorker,
+  startOrderUploadWorker
+} from './uploadQueue.js';
 import { retryFailedOrder, startReconciliationScheduler } from './reliability.js';
 import {
+  buildAuthorizationUrl,
+  createOAuth2Client,
+  exchangeAuthorizationCode
+} from './driveAuth.js';
+import {
   acceptedView,
+  googleDriveOAuthResultView,
   loginView,
   orderDetailView,
   orderFormView,
@@ -32,12 +47,14 @@ if (!config.auth.sessionSecret) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const incomingUploadDir = path.resolve(config.uploadDir, '_incoming');
 
 await fs.mkdir(incomingUploadDir, { recursive: true });
 await initializeDatabase();
 await bootstrapAdminUser();
 startOrderUploadWorker();
+startNotaOcrWorker();
 startReconciliationScheduler();
 
 const upload = multer({
@@ -62,7 +79,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: 'auto',
     maxAge: config.auth.sessionMaxAgeHours * 60 * 60 * 1000,
     sameSite: 'lax'
   }
@@ -80,6 +97,15 @@ async function cleanupUploadedFiles(files = []) {
 function statusLabel(status) {
   const labels = {
     processing: 'Diproses',
+    completed: 'Selesai',
+    failed: 'Gagal'
+  };
+  return labels[status] || status || '-';
+}
+
+function ocrStatusLabel(status) {
+  const labels = {
+    processing: 'Membaca nota',
     completed: 'Selesai',
     failed: 'Gagal'
   };
@@ -238,9 +264,79 @@ app.post('/logout', requireAuth, (request, response) => {
   });
 });
 
+/* ===== Google Drive OAuth (live callback) ===== */
+
+app.get('/oauth2/callback', async (request, response) => {
+  if (!request.session?.googleOAuthSetupPending) {
+    response.status(403).send(googleDriveOAuthResultView({
+      success: false,
+      error: 'Sesi setup OAuth tidak valid. Mulai dari /setup/google-drive setelah login.'
+    }));
+    return;
+  }
+
+  const oauthError = request.query.error;
+
+  if (oauthError) {
+    request.session.googleOAuthSetupPending = false;
+    response.status(400).send(googleDriveOAuthResultView({
+      success: false,
+      error: `Google menolak akses: ${oauthError}`
+    }));
+    return;
+  }
+
+  const code = request.query.code;
+
+  if (!code) {
+    response.status(400).send(googleDriveOAuthResultView({
+      success: false,
+      error: 'Kode otorisasi tidak ditemukan.'
+    }));
+    return;
+  }
+
+  try {
+    if (!config.drive.clientId || !config.drive.clientSecret) {
+      throw new Error('GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET belum diisi di .env');
+    }
+
+    const oauth2Client = createOAuth2Client();
+    const tokens = await exchangeAuthorizationCode(oauth2Client, code);
+    request.session.googleOAuthSetupPending = false;
+
+    response.send(googleDriveOAuthResultView({
+      success: true,
+      refreshToken: tokens.refresh_token,
+      redirectUri: config.drive.oauthRedirectUri
+    }));
+  } catch (error) {
+    request.session.googleOAuthSetupPending = false;
+    response.status(500).send(googleDriveOAuthResultView({
+      success: false,
+      error: error.message
+    }));
+  }
+});
+
 /* ===== Protected Routes ===== */
 
 app.use(requireAuth);
+
+app.get('/setup/google-drive', (request, response) => {
+  if (!config.drive.clientId || !config.drive.clientSecret) {
+    response.status(400).send(googleDriveOAuthResultView({
+      success: false,
+      error: 'Isi GOOGLE_CLIENT_ID dan GOOGLE_CLIENT_SECRET di .env terlebih dahulu.'
+    }));
+    return;
+  }
+
+  request.session.googleOAuthSetupPending = true;
+  const oauth2Client = createOAuth2Client();
+  const authUrl = buildAuthorizationUrl(oauth2Client);
+  response.redirect(authUrl);
+});
 
 app.get('/', async (request, response) => {
   try {
@@ -279,7 +375,9 @@ app.get('/api/orders/:orderCode/status', async (request, response) => {
   }
 
   const jobStatus = await getOrderUploadJobStatus(order.order_code);
+  const ocrJobStatus = await getNotaOcrJobStatus(order.order_code);
   const progress = jobStatus?.progress ?? { percent: order.status === 'completed' ? 100 : 0 };
+  const ocr = order.ocr;
 
   response.json({
     orderCode: order.order_code,
@@ -289,6 +387,27 @@ app.get('/api/orders/:orderCode/status', async (request, response) => {
     googleDriveFolderId: order.google_drive_folder_id,
     errorMessage: order.error_message,
     canRetry: order.status === 'failed',
+    ocr: ocr ? {
+      status: ocr.status,
+      statusLabel: ocrStatusLabel(ocr.status),
+      notaOrderCode: ocr.nota_order_code,
+      notaDate: ocr.nota_date,
+      itemCountDetected: ocr.item_count_detected,
+      itemCountExpected: ocr.item_count_expected,
+      itemCountMatch: ocr.item_count_match,
+      customerAnonId: ocr.customer_anon_id,
+      ocrEngine: ocr.ocr_engine,
+      ocrConfidence: ocr.ocr_confidence,
+      errorMessage: ocr.error_message,
+      queueState: ocrJobStatus?.state || null,
+      items: (ocr.items || []).map((item) => ({
+        lineIndex: item.line_index,
+        productType: item.product_type,
+        qty: item.qty,
+        sizeText: item.size_text,
+        fileNameHint: item.file_name_hint
+      }))
+    } : null,
     progress: {
       percent: progress.percent ?? 0,
       currentFile: progress.currentFile ?? null,
@@ -335,13 +454,41 @@ app.get('/api/config', (request, response) => {
   });
 });
 
+app.post('/api/nota/preview', upload.single('nota'), async (request, response) => {
+  try {
+    if (!request.file) {
+      response.status(400).json({ success: false, error: 'Nota PDF wajib diupload.' });
+      return;
+    }
+
+    if (request.file.mimetype !== 'application/pdf' && !request.file.originalname.toLowerCase().endsWith('.pdf')) {
+      response.status(400).json({ success: false, error: 'Nota harus berformat PDF.' });
+      return;
+    }
+
+    const preview = await previewNotaFromPath(request.file.path);
+    await fs.rm(request.file.path, { force: true });
+
+    response.json({
+      success: true,
+      ...preview
+    });
+  } catch (error) {
+    await cleanupUploadedFiles(request.file ? [request.file] : []);
+    response.status(400).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 app.post('/orders', upload.any(), async (request, response) => {
   let orderJob;
   const wantsJson = request.headers.accept?.includes('application/json')
     || request.headers['x-requested-with'] === 'XMLHttpRequest';
 
   try {
-    const payload = parseAndValidateUpload({
+    const payload = await parseAndValidateUpload({
       body: request.body,
       files: request.files
     });
@@ -353,6 +500,21 @@ app.post('/orders', upload.any(), async (request, response) => {
     } catch (enqueueError) {
       await markOrderFailed(orderJob.orderId, `Gagal masuk antrian: ${enqueueError.message}`);
       throw enqueueError;
+    }
+
+    try {
+      const notaPath = await prepareNotaCopyForOcr(
+        orderJob.orderCode,
+        path.join(orderJob.orderDir, 'nota.pdf')
+      );
+      await enqueueNotaOcrJob({
+        orderId: orderJob.orderId,
+        orderCode: orderJob.orderCode,
+        itemCount: orderJob.itemCount,
+        notaPath
+      });
+    } catch (ocrEnqueueError) {
+      console.error(`Gagal enqueue OCR untuk ${orderJob.orderCode}:`, ocrEnqueueError.message);
     }
 
     if (wantsJson) {

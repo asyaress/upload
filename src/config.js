@@ -26,14 +26,24 @@ export const config = {
   },
   drive: {
     parentFolderId: process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID || '',
-    serviceAccountJson: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON || '',
-    credentialsPath: process.env.GOOGLE_APPLICATION_CREDENTIALS || ''
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    refreshToken: process.env.GOOGLE_REFRESH_TOKEN || '',
+    oauthRedirectUri:
+      process.env.GOOGLE_OAUTH_REDIRECT_URI
+      || 'https://upload-desain.toedjoesinargroup.com/oauth2/callback'
   },
   auth: {
     adminUsername: process.env.ADMIN_USERNAME || 'admin@gmail.com',
     adminPassword: process.env.ADMIN_PASSWORD || 'password',
     sessionSecret: process.env.SESSION_SECRET || '',
     sessionMaxAgeHours: intFromEnv('SESSION_MAX_AGE_HOURS', 12)
+  },
+  ocr: {
+    customerAnonSalt: process.env.CUSTOMER_ANON_SALT || process.env.SESSION_SECRET || 'change-me-ocr-salt',
+    tesseractLang: process.env.OCR_TESSERACT_LANG || 'ind+eng',
+    renderScale: Number.parseFloat(process.env.OCR_RENDER_SCALE || '1.75'),
+    workerConcurrency: intFromEnv('OCR_WORKER_CONCURRENCY', 1)
   }
 };
 

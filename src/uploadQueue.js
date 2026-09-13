@@ -1,10 +1,25 @@
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { config } from './config.js';
+import { createNotaOcrPending } from './db.js';
+import { processNotaOcrJobSafe } from './notaOcrService.js';
 import { processOrderUploadJob } from './orderService.js';
 
 const connection = new IORedis(config.redisUrl, {
   maxRetriesPerRequest: null
+});
+
+export const notaOcrQueue = new Queue('nota-ocr', {
+  connection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: {
+      type: 'exponential',
+      delay: 10_000
+    },
+    removeOnComplete: 100,
+    removeOnFail: 200
+  }
 });
 
 export const orderUploadQueue = new Queue('order-upload', {
@@ -52,6 +67,42 @@ export async function getOrderUploadJobStatus(orderCode) {
   };
 }
 
+export async function enqueueNotaOcrJob(ocrJob) {
+  await createNotaOcrPending({
+    orderId: ocrJob.orderId,
+    orderCode: ocrJob.orderCode,
+    itemCountExpected: ocrJob.itemCount
+  });
+
+  const jobId = `ocr-${ocrJob.orderCode}`;
+  const existingJob = await notaOcrQueue.getJob(jobId);
+
+  if (existingJob) {
+    const state = await existingJob.getState();
+    if (state === 'active' || state === 'waiting' || state === 'delayed') {
+      return existingJob;
+    }
+    await existingJob.remove();
+  }
+
+  return notaOcrQueue.add('process-nota-ocr', ocrJob, { jobId });
+}
+
+export async function getNotaOcrJobStatus(orderCode) {
+  const job = await notaOcrQueue.getJob(`ocr-${orderCode}`);
+
+  if (!job) {
+    return null;
+  }
+
+  const state = await job.getState();
+
+  return {
+    state,
+    failedReason: job.failedReason || null
+  };
+}
+
 export function startOrderUploadWorker() {
   const worker = new Worker(
     'order-upload',
@@ -72,6 +123,30 @@ export function startOrderUploadWorker() {
 
   worker.on('completed', (job) => {
     console.log(`Upload selesai: ${job?.data?.orderCode}`);
+  });
+
+  return worker;
+}
+
+export function startNotaOcrWorker() {
+  const worker = new Worker(
+    'nota-ocr',
+    async (job) => processNotaOcrJobSafe(job.data),
+    {
+      connection,
+      concurrency: config.ocr.workerConcurrency,
+      lockDuration: 1_800_000,
+      stalledInterval: 120_000,
+      maxStalledCount: 3
+    }
+  );
+
+  worker.on('failed', (job, error) => {
+    console.error(`OCR nota gagal untuk ${job?.data?.orderCode}:`, error.message);
+  });
+
+  worker.on('completed', (job) => {
+    console.log(`OCR nota selesai: ${job?.data?.orderCode}`);
   });
 
   return worker;

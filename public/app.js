@@ -3,6 +3,15 @@
 const itemCountInput = document.querySelector('#item-count');
 const designFields = document.querySelector('#design-fields');
 const orderForm = document.querySelector('#order-form');
+const autoUploadSection = document.querySelector('#auto-upload-section');
+const notaScanStatus = document.querySelector('#nota-scan-status');
+const submitBtn = document.querySelector('#submit-btn');
+const previewNotaOrderCode = document.querySelector('#preview-nota-order-code');
+const previewNotaDate = document.querySelector('#preview-nota-date');
+const previewItemCount = document.querySelector('#preview-item-count');
+
+let notaPreview = null;
+let notaScanRequestId = 0;
 
 const SWAL_DEFAULTS = {
   customClass: { popup: 'app-swal' },
@@ -205,33 +214,89 @@ function setupFileDrop(dropEl) {
   });
 }
 
-function setupNotaDrop() {
-  const notaDrop = document.querySelector('.file-drop[data-field="nota"]');
-  if (notaDrop) setupFileDrop(notaDrop);
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
-/* ===== Design Fields ===== */
+function setSubmitEnabled(enabled) {
+  if (submitBtn) submitBtn.disabled = !enabled;
+}
 
-function renderDesignFields() {
+function hideAutoUploadSection() {
+  autoUploadSection?.classList.add('hidden');
+  if (designFields) designFields.innerHTML = '';
+  setSubmitEnabled(false);
+}
+
+function showAutoUploadSection() {
+  autoUploadSection?.classList.remove('hidden');
+  setSubmitEnabled(true);
+}
+
+function setNotaScanStatus(kind, message) {
+  if (!notaScanStatus) return;
+
+  notaScanStatus.classList.remove('hidden', 'is-loading', 'is-success', 'is-error');
+  notaScanStatus.classList.add(kind === 'loading' ? 'is-loading' : kind === 'success' ? 'is-success' : 'is-error');
+  notaScanStatus.innerHTML = message;
+}
+
+function clearNotaScanStatus() {
+  if (!notaScanStatus) return;
+  notaScanStatus.classList.add('hidden');
+  notaScanStatus.classList.remove('is-loading', 'is-success', 'is-error');
+  notaScanStatus.innerHTML = '';
+}
+
+function buildItemInfoHtml(item) {
+  if (!item) {
+    return '<p class="design-item-hint">Upload design JPEG untuk item ini.</p>';
+  }
+
+  const meta = [];
+  if (item.qty) meta.push(`<span>Qty: ${escapeHtml(item.qty)}</span>`);
+  if (item.sizeText) meta.push(`<span>Ukuran: ${escapeHtml(item.sizeText)}</span>`);
+  if (item.fileNameHint) meta.push(`<span>File nota: ${escapeHtml(item.fileNameHint)}</span>`);
+
+  return `
+    <div class="design-item-info">
+      <div class="design-row-head">
+        <strong>Item ${pad2(item.lineIndex)}</strong>
+        <span class="design-product">${escapeHtml(item.productType || 'Produk tidak terbaca')}</span>
+      </div>
+      ${meta.length ? `<div class="design-item-meta">${meta.join('')}</div>` : ''}
+      <p class="design-item-hint">Upload design JPEG yang sesuai produk di atas.</p>
+    </div>
+  `;
+}
+
+function renderDesignFields(items = []) {
   if (!itemCountInput || !designFields) return;
 
-  const maxItems = Number.parseInt(itemCountInput.max, 10) || 50;
-  const count = Number.parseInt(itemCountInput.value, 10) || 1;
+  const maxItems = Number.parseInt(orderForm?.dataset.maxItems, 10) || 50;
+  const count = items.length || Number.parseInt(itemCountInput.value, 10) || 1;
   const safeCount = Math.min(Math.max(count, 1), maxItems);
 
+  itemCountInput.value = String(safeCount);
   designFields.innerHTML = '';
 
   for (let itemIndex = 1; itemIndex <= safeCount; itemIndex += 1) {
+    const item = items[itemIndex - 1] || null;
     const row = document.createElement('div');
     row.className = 'design-row';
 
     row.innerHTML = `
-      <strong>Item ${pad2(itemIndex)}</strong>
+      ${buildItemInfoHtml(item ? { ...item, lineIndex: item.lineIndex || itemIndex } : { lineIndex: itemIndex })}
       <label class="file-drop" data-field="design_${itemIndex}">
         <input type="file" name="design_${itemIndex}" accept="image/jpeg,.jpg,.jpeg" required hidden>
         <div class="file-drop-content">
           <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-          <span class="file-drop-text">Pilih JPEG/JPG</span>
+          <span class="file-drop-text">Pilih JPEG/JPG untuk item ${pad2(itemIndex)}</span>
         </div>
         <div class="file-selected hidden"></div>
       </label>
@@ -242,12 +307,130 @@ function renderDesignFields() {
   }
 }
 
-if (itemCountInput && designFields) {
-  itemCountInput.addEventListener('input', renderDesignFields);
-  renderDesignFields();
+function updateNotaSummary(preview) {
+  if (previewNotaOrderCode) previewNotaOrderCode.textContent = preview.notaOrderCode || '-';
+  if (previewNotaDate) previewNotaDate.textContent = preview.notaDate || '-';
+  if (previewItemCount) previewItemCount.textContent = String(preview.itemCount || '-');
+}
+
+function resetNotaWorkflow() {
+  notaPreview = null;
+  if (itemCountInput) itemCountInput.value = '1';
+  hideAutoUploadSection();
+  clearNotaScanStatus();
+}
+
+async function scanNotaFile(file) {
+  const requestId = ++notaScanRequestId;
+  notaPreview = null;
+  hideAutoUploadSection();
+
+  setNotaScanStatus(
+    'loading',
+    '<span class="nota-scan-spinner" aria-hidden="true"></span> Membaca nota PDF... Mohon tunggu, proses ini bisa memakan waktu untuk nota scan.'
+  );
+
+  const formData = new FormData();
+  formData.append('nota', file);
+
+  try {
+    const response = await fetch('/api/nota/preview', {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Gagal membaca nota.');
+    }
+
+    if (requestId !== notaScanRequestId) return;
+
+    notaPreview = data;
+    updateNotaSummary(data);
+    renderDesignFields(data.items || []);
+    showAutoUploadSection();
+
+    setNotaScanStatus(
+      'success',
+      `Nota terbaca: <strong>${escapeHtml(data.notaOrderCode || 'Tanpa kode')}</strong> · ${escapeHtml(data.itemCount)} item terdeteksi · engine ${escapeHtml(data.ocrEngine || '-')}`
+    );
+  } catch (error) {
+    if (requestId !== notaScanRequestId) return;
+
+    resetNotaWorkflow();
+    setNotaScanStatus('error', escapeHtml(error.message));
+  }
+}
+
+function setupNotaDrop() {
+  const notaDrop = document.querySelector('#nota-drop');
+  if (!notaDrop) return;
+
+  const input = notaDrop.querySelector('input[type="file"]');
+  const content = notaDrop.querySelector('.file-drop-content');
+  const selected = notaDrop.querySelector('.file-selected');
+
+  if (!input) return;
+
+  function showSelected(file) {
+    notaDrop.classList.add('has-file');
+    content.classList.add('hidden');
+    selected.classList.remove('hidden');
+    selected.innerHTML = `
+      <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="20" height="20"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <div>
+        <div class="file-name">${escapeHtml(file.name)}</div>
+        <div class="file-size">${formatBytes(file.size)}</div>
+      </div>
+      <button type="button" class="file-remove" aria-label="Hapus file">Hapus</button>
+    `;
+
+    selected.querySelector('.file-remove').addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      input.value = '';
+      notaDrop.classList.remove('has-file');
+      content.classList.remove('hidden');
+      selected.classList.add('hidden');
+      selected.innerHTML = '';
+      resetNotaWorkflow();
+    });
+
+    scanNotaFile(file);
+  }
+
+  input.addEventListener('change', () => {
+    if (input.files?.[0]) {
+      showSelected(input.files[0]);
+    }
+  });
+
+  notaDrop.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    notaDrop.classList.add('dragover');
+  });
+
+  notaDrop.addEventListener('dragleave', () => {
+    notaDrop.classList.remove('dragover');
+  });
+
+  notaDrop.addEventListener('drop', (event) => {
+    event.preventDefault();
+    notaDrop.classList.remove('dragover');
+
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    input.files = dataTransfer.files;
+    showSelected(file);
+  });
 }
 
 setupNotaDrop();
+hideAutoUploadSection();
 
 /* ===== Client-side Validation ===== */
 
@@ -264,9 +447,18 @@ function validateForm(formData) {
     if (!nota.name.toLowerCase().endsWith('.pdf') && nota.type !== 'application/pdf') {
       errors.push('Nota harus berformat PDF.');
     }
+  } else {
+    errors.push('Nota PDF wajib diupload.');
+  }
+
+  if (!notaPreview?.itemCount) {
+    errors.push('Tunggu sampai nota selesai dibaca sebelum upload design.');
   }
 
   const itemCount = Number.parseInt(formData.get('item_count'), 10) || 0;
+  if (notaPreview && itemCount !== notaPreview.itemCount) {
+    errors.push(`Jumlah design (${itemCount}) tidak sesuai nota (${notaPreview.itemCount} item).`);
+  }
   for (let i = 1; i <= itemCount; i += 1) {
     const design = formData.get(`design_${i}`);
     if (design instanceof File && design.size > 0) {
@@ -439,6 +631,17 @@ if (statusTracker) {
   const driveFolder = document.getElementById('drive-folder');
   const errorAlert = document.getElementById('error-alert');
   const filesTableBody = document.getElementById('files-table-body');
+  const ocrStatusBadge = document.getElementById('ocr-status-badge');
+  const ocrItemsBody = document.getElementById('ocr-items-body');
+  const ocrNotaOrderCode = document.getElementById('ocr-nota-order-code');
+  const ocrNotaDate = document.getElementById('ocr-nota-date');
+  const ocrItemCount = document.getElementById('ocr-item-count');
+  const ocrItemMatch = document.getElementById('ocr-item-match');
+  const ocrEngine = document.getElementById('ocr-engine');
+  const ocrConfidence = document.getElementById('ocr-confidence');
+  const ocrCustomerId = document.getElementById('ocr-customer-id');
+  const ocrErrorAlert = document.getElementById('ocr-error-alert');
+  let currentOcrStatus = statusTracker.dataset.ocrStatus || null;
 
   const phaseLabels = {
     waiting: 'Menunggu worker...',
@@ -446,6 +649,53 @@ if (statusTracker) {
     saving: 'Menyimpan metadata...',
     done: 'Selesai'
   };
+
+  function formatOcrConfidence(value) {
+    if (value === null || value === undefined) return '-';
+    const percent = Number(value) * 100;
+    return Number.isFinite(percent) ? `${percent.toFixed(1)}%` : '-';
+  }
+
+  function updateOcrPanel(ocr, itemCount) {
+    if (!ocr) return;
+
+    if (ocrStatusBadge) {
+      ocrStatusBadge.textContent = ocr.statusLabel || ocr.status;
+      ocrStatusBadge.className = `status status-${ocr.status}`;
+    }
+    if (ocrNotaOrderCode) ocrNotaOrderCode.textContent = ocr.notaOrderCode || '-';
+    if (ocrNotaDate) ocrNotaDate.textContent = ocr.notaDate || '-';
+    if (ocrItemCount) {
+      ocrItemCount.textContent = `${ocr.itemCountDetected ?? '-'} / ${itemCount}`;
+    }
+    if (ocrItemMatch) {
+      const match = ocr.itemCountMatch;
+      ocrItemMatch.textContent = match === null ? '-' : match ? 'Cocok' : 'Tidak cocok';
+      ocrItemMatch.className = `status ${match === null ? '' : match ? 'status-completed' : 'status-failed'}`;
+    }
+    if (ocrEngine) ocrEngine.textContent = ocr.ocrEngine || '-';
+    if (ocrConfidence) ocrConfidence.textContent = formatOcrConfidence(ocr.ocrConfidence);
+    if (ocrCustomerId) ocrCustomerId.textContent = ocr.customerAnonId || '-';
+    if (ocrErrorAlert) {
+      if (ocr.errorMessage) {
+        ocrErrorAlert.textContent = ocr.errorMessage;
+        ocrErrorAlert.classList.remove('hidden');
+      } else {
+        ocrErrorAlert.classList.add('hidden');
+      }
+    }
+    if (ocrItemsBody && ocr.items?.length) {
+      ocrItemsBody.innerHTML = ocr.items.map((item) => `
+        <tr>
+          <td>${item.lineIndex}</td>
+          <td>${item.productType || '-'}</td>
+          <td>${item.qty ?? '-'}</td>
+          <td>${item.sizeText || '-'}</td>
+          <td>${item.fileNameHint || '-'}</td>
+        </tr>
+      `).join('');
+    }
+  }
 
   function updateFilesTable(files) {
     if (!filesTableBody || !files.length) return;
@@ -505,28 +755,38 @@ if (statusTracker) {
         updateFilesTable(data.files);
       }
 
+      if (data.ocr) {
+        updateOcrPanel(data.ocr, data.itemCount);
+        currentOcrStatus = data.ocr.status;
+      }
+
       if (data.errorMessage && errorAlert) {
         errorAlert.textContent = data.errorMessage;
         errorAlert.classList.remove('hidden');
       }
 
+      const uploadFinished = status === 'completed' || status === 'failed';
+      const ocrFinished = !data.ocr || data.ocr.status === 'completed' || data.ocr.status === 'failed';
+
       if (status === 'completed') {
         if (progressSection) progressSection.classList.add('hidden');
-        clearInterval(pollTimer);
 
-        Swal.fire({
-          ...SWAL_DEFAULTS,
-          toast: true,
-          position: 'top-end',
-          icon: 'success',
-          title: 'Upload ke Google Drive selesai!',
-          showConfirmButton: false,
-          timer: 4000,
-          timerProgressBar: true
-        });
+        if (ocrFinished) {
+          clearInterval(pollTimer);
+          Swal.fire({
+            ...SWAL_DEFAULTS,
+            toast: true,
+            position: 'top-end',
+            icon: 'success',
+            title: 'Upload ke Google Drive selesai!',
+            showConfirmButton: false,
+            timer: 4000,
+            timerProgressBar: true
+          });
+        }
       } else if (status === 'failed') {
         if (progressSection) progressSection.classList.add('hidden');
-        clearInterval(pollTimer);
+        if (ocrFinished) clearInterval(pollTimer);
 
         Swal.fire({
           ...SWAL_DEFAULTS,
@@ -535,6 +795,8 @@ if (statusTracker) {
           text: data.errorMessage || 'Terjadi kesalahan saat upload ke Google Drive.',
           confirmButtonText: 'OK'
         });
+      } else if (uploadFinished && ocrFinished) {
+        clearInterval(pollTimer);
       }
 
       currentStatus = status;
@@ -543,8 +805,10 @@ if (statusTracker) {
     }
   }
 
-  if (currentStatus === 'processing') {
-    if (progressSection) progressSection.classList.remove('hidden');
+  if (currentStatus === 'processing' || currentOcrStatus === 'processing') {
+    if (progressSection && currentStatus === 'processing') {
+      progressSection.classList.remove('hidden');
+    }
     pollStatus();
     pollTimer = setInterval(pollStatus, 2000);
   } else if (currentStatus === 'completed' && progressFill) {

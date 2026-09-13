@@ -12,6 +12,7 @@ import {
   buildJobFileKey
 } from './db.js';
 import { getOrCreateFolder, findFileByName, uploadFilePath } from './driveStorage.js';
+import { previewNotaFromPath } from './notaPreviewService.js';
 import { config } from './config.js';
 
 const pdfMimeTypes = new Set(['application/pdf']);
@@ -55,7 +56,7 @@ function groupFilesByField(files) {
   return grouped;
 }
 
-export function parseAndValidateUpload({ body, files }) {
+export async function parseAndValidateUpload({ body, files }) {
   const itemCount = normalizeItemCount(body.item_count);
   const filesByField = groupFilesByField(files || []);
   const expectedFields = new Set(['nota']);
@@ -73,6 +74,13 @@ export function parseAndValidateUpload({ body, files }) {
   const nota = getSingleFile(filesByField, 'nota');
   if (!pdfMimeTypes.has(nota.mimetype) || !hasExtension(nota.originalname, ['.pdf'])) {
     throw new Error('Nota wajib berupa file PDF.');
+  }
+
+  const notaPreview = await previewNotaFromPath(nota.path);
+  if (itemCount !== notaPreview.itemCount) {
+    throw new Error(
+      `Jumlah design (${itemCount}) tidak sesuai nota (${notaPreview.itemCount} item).`
+    );
   }
 
   const designs = [];
@@ -94,7 +102,8 @@ export function parseAndValidateUpload({ body, files }) {
   return {
     itemCount,
     nota,
-    designs
+    designs,
+    notaPreview
   };
 }
 

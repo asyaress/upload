@@ -85,18 +85,61 @@ Semua halaman dan API dilindungi session. Tanpa login, akses ditolak.
 | `POST` | `/orders` | Upload order (JSON response jika `X-Requested-With: XMLHttpRequest`) |
 | `POST` | `/logout` | Keluar dari session |
 
-## Google Drive
+## Google Drive (OAuth 2.0)
 
-Cara paling sederhana untuk MVP:
+Tidak perlu service account key (cocok jika organisasi memblokir `iam.disableServiceAccountKeyCreation`).
 
-1. Buat Google Cloud service account.
-2. Aktifkan Google Drive API.
-3. Download JSON key service account.
-4. Buat folder Google Drive induk untuk dataset.
-5. Share folder induk tersebut ke email service account.
-6. Isi `GOOGLE_DRIVE_PARENT_FOLDER_ID` dan salah satu credential berikut:
-   - `GOOGLE_SERVICE_ACCOUNT_KEY_JSON`
-   - `GOOGLE_APPLICATION_CREDENTIALS`
+### 1. Google Cloud Console
+
+1. Buat / pilih project
+2. Aktifkan **Google Drive API**
+3. **APIs & Services → OAuth consent screen** → isi app name, pilih External/Internal → Save
+4. **Credentials → Create Credentials → OAuth client ID**
+5. Application type: **Web application**
+6. Authorized redirect URIs (tambahkan keduanya jika perlu dev + live):
+   ```
+   https://upload-desain.toedjoesinargroup.com/oauth2/callback
+   http://localhost:3333/oauth2/callback
+   ```
+7. Copy **Client ID** dan **Client Secret**
+
+### 2. Folder Drive
+
+1. Buat folder di Google Drive (akun yang sama dengan OAuth login)
+2. Copy Folder ID dari URL:
+   ```
+   https://drive.google.com/drive/folders/FOLDER_ID_DI_SINI
+   ```
+
+### 3. Isi `.env`
+
+```env
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_OAUTH_REDIRECT_URI=https://upload-desain.toedjoesinargroup.com/oauth2/callback
+GOOGLE_DRIVE_PARENT_FOLDER_ID=...
+```
+
+### 4. Dapatkan refresh token (sekali saja)
+
+**Live server (disarankan):**
+
+1. Login ke app: `https://upload-desain.toedjoesinargroup.com/login`
+2. Buka: `https://upload-desain.toedjoesinargroup.com/setup/google-drive`
+3. Approve akses Google → copy `GOOGLE_REFRESH_TOKEN` ke `.env`
+4. Restart app
+
+**Local dev:**
+
+```bash
+npm run google:auth
+```
+
+### 5. Restart app
+
+```bash
+pm2 restart upload-desain
+```
 
 ## Relasi Metadata
 

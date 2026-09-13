@@ -60,6 +60,51 @@ async function tableExists(tableName) {
   return rows.length > 0;
 }
 
+async function ensureNotaOcrTables() {
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS nota_ocr_results (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      order_id BIGINT UNSIGNED NOT NULL,
+      order_code VARCHAR(32) NOT NULL,
+      status VARCHAR(24) NOT NULL DEFAULT 'processing',
+      nota_order_code VARCHAR(32) NULL,
+      nota_date DATE NULL,
+      item_count_detected INT UNSIGNED NULL,
+      item_count_expected INT UNSIGNED NOT NULL,
+      item_count_match TINYINT(1) NULL,
+      customer_anon_id VARCHAR(32) NULL,
+      ocr_engine VARCHAR(24) NULL,
+      ocr_confidence DECIMAL(6, 4) NULL,
+      error_message TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_nota_ocr_order_id (order_id),
+      UNIQUE KEY uq_nota_ocr_order_code (order_code),
+      CONSTRAINT fk_nota_ocr_order_id
+        FOREIGN KEY (order_id) REFERENCES orders(id)
+        ON DELETE CASCADE
+    )
+  `);
+
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS nota_ocr_items (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      ocr_result_id BIGINT UNSIGNED NOT NULL,
+      line_index INT UNSIGNED NOT NULL,
+      product_type VARCHAR(255) NULL,
+      qty INT UNSIGNED NULL,
+      size_text VARCHAR(128) NULL,
+      file_name_hint VARCHAR(255) NULL,
+      PRIMARY KEY (id),
+      KEY idx_nota_ocr_items_result (ocr_result_id),
+      CONSTRAINT fk_nota_ocr_items_result
+        FOREIGN KEY (ocr_result_id) REFERENCES nota_ocr_results(id)
+        ON DELETE CASCADE
+    )
+  `);
+}
+
 export async function initializeDatabase() {
   assertSafeDatabaseName(config.db.database);
 
@@ -158,6 +203,8 @@ export async function initializeDatabase() {
       )
     `);
   }
+
+  await ensureNotaOcrTables();
 }
 
 /* ===== Users ===== */
@@ -349,9 +396,214 @@ export async function getOrderDetail(orderCode) {
     { orderId: order.id }
   );
 
+  const ocr = await getNotaOcrByOrderCode(orderCode);
+
   return {
     ...order,
-    files
+    files,
+    ocr
+  };
+}
+
+/* ===== Nota OCR ===== */
+
+export async function createNotaOcrPending({ orderId, orderCode, itemCountExpected }) {
+  await getPool().execute(
+    `
+      INSERT INTO nota_ocr_results (
+        order_id,
+        order_code,
+        status,
+        item_count_expected
+      )
+      VALUES (:orderId, :orderCode, 'processing', :itemCountExpected)
+      ON DUPLICATE KEY UPDATE
+        status = IF(status = 'completed', status, 'processing'),
+        item_count_expected = VALUES(item_count_expected),
+        error_message = NULL
+    `,
+    { orderId, orderCode, itemCountExpected }
+  );
+}
+
+export async function saveNotaOcrSuccess({
+  orderId,
+  orderCode,
+  notaOrderCode,
+  notaDate,
+  itemCountDetected,
+  itemCountExpected,
+  itemCountMatch,
+  customerAnonId,
+  ocrEngine,
+  ocrConfidence,
+  items
+}) {
+  const connection = await getPool().getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    await connection.execute(
+      `
+        INSERT INTO nota_ocr_results (
+          order_id,
+          order_code,
+          status,
+          nota_order_code,
+          nota_date,
+          item_count_detected,
+          item_count_expected,
+          item_count_match,
+          customer_anon_id,
+          ocr_engine,
+          ocr_confidence,
+          error_message
+        )
+        VALUES (
+          :orderId,
+          :orderCode,
+          'completed',
+          :notaOrderCode,
+          :notaDate,
+          :itemCountDetected,
+          :itemCountExpected,
+          :itemCountMatch,
+          :customerAnonId,
+          :ocrEngine,
+          :ocrConfidence,
+          NULL
+        )
+        ON DUPLICATE KEY UPDATE
+          status = 'completed',
+          nota_order_code = VALUES(nota_order_code),
+          nota_date = VALUES(nota_date),
+          item_count_detected = VALUES(item_count_detected),
+          item_count_expected = VALUES(item_count_expected),
+          item_count_match = VALUES(item_count_match),
+          customer_anon_id = VALUES(customer_anon_id),
+          ocr_engine = VALUES(ocr_engine),
+          ocr_confidence = VALUES(ocr_confidence),
+          error_message = NULL
+      `,
+      {
+        orderId,
+        orderCode,
+        notaOrderCode,
+        notaDate,
+        itemCountDetected,
+        itemCountExpected,
+        itemCountMatch: itemCountMatch ? 1 : 0,
+        customerAnonId,
+        ocrEngine,
+        ocrConfidence
+      }
+    );
+
+    const [[resultRow]] = await connection.execute(
+      'SELECT id FROM nota_ocr_results WHERE order_id = :orderId LIMIT 1',
+      { orderId }
+    );
+
+    await connection.execute(
+      'DELETE FROM nota_ocr_items WHERE ocr_result_id = :ocrResultId',
+      { ocrResultId: resultRow.id }
+    );
+
+    for (const item of items) {
+      await connection.execute(
+        `
+          INSERT INTO nota_ocr_items (
+            ocr_result_id,
+            line_index,
+            product_type,
+            qty,
+            size_text,
+            file_name_hint
+          )
+          VALUES (
+            :ocrResultId,
+            :lineIndex,
+            :productType,
+            :qty,
+            :sizeText,
+            :fileNameHint
+          )
+        `,
+        {
+          ocrResultId: resultRow.id,
+          lineIndex: item.line_index,
+          productType: item.product_type,
+          qty: item.qty,
+          sizeText: item.size_text,
+          fileNameHint: item.file_name_hint
+        }
+      );
+    }
+
+    await connection.commit();
+    return getNotaOcrByOrderCode(orderCode);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+export async function saveNotaOcrFailure({ orderId, orderCode, itemCountExpected, errorMessage }) {
+  await getPool().execute(
+    `
+      INSERT INTO nota_ocr_results (
+        order_id,
+        order_code,
+        status,
+        item_count_expected,
+        error_message
+      )
+      VALUES (:orderId, :orderCode, 'failed', :itemCountExpected, :errorMessage)
+      ON DUPLICATE KEY UPDATE
+        status = 'failed',
+        item_count_expected = VALUES(item_count_expected),
+        error_message = VALUES(error_message)
+    `,
+    {
+      orderId,
+      orderCode,
+      itemCountExpected,
+      errorMessage: String(errorMessage || 'OCR gagal.').slice(0, 4000)
+    }
+  );
+}
+
+export async function getNotaOcrByOrderCode(orderCode) {
+  if (!(await tableExists('nota_ocr_results'))) {
+    return null;
+  }
+
+  const [[result]] = await getPool().execute(
+    'SELECT * FROM nota_ocr_results WHERE order_code = :orderCode LIMIT 1',
+    { orderCode }
+  );
+
+  if (!result) {
+    return null;
+  }
+
+  const [items] = await getPool().execute(
+    `
+      SELECT line_index, product_type, qty, size_text, file_name_hint
+      FROM nota_ocr_items
+      WHERE ocr_result_id = :ocrResultId
+      ORDER BY line_index ASC
+    `,
+    { ocrResultId: result.id }
+  );
+
+  return {
+    ...result,
+    item_count_match: result.item_count_match === null ? null : Boolean(result.item_count_match),
+    items
   };
 }
 

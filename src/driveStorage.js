@@ -1,53 +1,10 @@
 import { createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { stat } from 'node:fs/promises';
-import { google } from 'googleapis';
 import { config } from './config.js';
+import { getAccessToken, getDriveClient } from './driveAuth.js';
 
 const CHUNK_SIZE = 8 * 1024 * 1024;
-
-let driveClient;
-
-function getAuth() {
-  const scopes = ['https://www.googleapis.com/auth/drive'];
-
-  if (config.drive.serviceAccountJson) {
-    const credentials = JSON.parse(config.drive.serviceAccountJson);
-    return new google.auth.GoogleAuth({ credentials, scopes });
-  }
-
-  return new google.auth.GoogleAuth({
-    keyFile: config.drive.credentialsPath || undefined,
-    scopes
-  });
-}
-
-function getDriveClient() {
-  if (!driveClient) {
-    if (!config.drive.parentFolderId) {
-      throw new Error('GOOGLE_DRIVE_PARENT_FOLDER_ID belum diisi.');
-    }
-
-    driveClient = google.drive({
-      version: 'v3',
-      auth: getAuth()
-    });
-  }
-
-  return driveClient;
-}
-
-export async function getAccessToken() {
-  const auth = getAuth();
-  const client = await auth.getClient();
-  const tokenResponse = await client.getAccessToken();
-
-  if (!tokenResponse.token) {
-    throw new Error('Gagal mendapatkan access token Google Drive.');
-  }
-
-  return tokenResponse.token;
-}
 
 async function findChildByName(name, parentId, mimeType = null) {
   const drive = getDriveClient();
@@ -150,8 +107,7 @@ async function uploadFilePathResumable({ filePath, fileName, mimeType, parentId,
   );
 
   if (initResponse.status === 401) {
-    token = await getToken();
-    throw new Error('Token Google Drive expired saat memulai upload. Coba retry.');
+    throw new Error('Token Google Drive expired. Jalankan ulang npm run google:auth');
   }
 
   if (!initResponse.ok) {

@@ -30,6 +30,119 @@ function statusLabel(status) {
   return labels[status] || status || '-';
 }
 
+function ocrStatusLabel(status) {
+  const labels = {
+    processing: 'Membaca nota',
+    completed: 'Selesai',
+    failed: 'Gagal'
+  };
+
+  return labels[status] || status || '-';
+}
+
+function formatOcrConfidence(value) {
+  if (value === null || value === undefined) return '-';
+  const percent = Number(value) * 100;
+  if (!Number.isFinite(percent)) return '-';
+  return `${percent.toFixed(1)}%`;
+}
+
+function renderOcrSection(order) {
+  const ocr = order.ocr;
+
+  if (!ocr) {
+    return `
+      <section class="ocr-panel" id="ocr-panel">
+        <div class="section-head">
+          <h2>OCR Nota</h2>
+        </div>
+        <p class="upload-note">OCR nota belum dijadwalkan.</p>
+      </section>
+    `;
+  }
+
+  const itemRows = ocr.items?.length
+    ? ocr.items.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.line_index)}</td>
+        <td>${escapeHtml(item.product_type || '-')}</td>
+        <td>${escapeHtml(item.qty ?? '-')}</td>
+        <td>${escapeHtml(item.size_text || '-')}</td>
+        <td>${escapeHtml(item.file_name_hint || '-')}</td>
+      </tr>
+    `).join('')
+    : `<tr><td colspan="5" class="empty">${ocr.status === 'processing' ? 'Menunggu hasil OCR...' : 'Tidak ada item terdeteksi.'}</td></tr>`;
+
+  const matchLabel = ocr.item_count_match === null
+    ? '-'
+    : ocr.item_count_match
+      ? 'Cocok'
+      : 'Tidak cocok';
+
+  const matchClass = ocr.item_count_match === null
+    ? ''
+    : ocr.item_count_match
+      ? 'status-completed'
+      : 'status-failed';
+
+  return `
+    <section class="ocr-panel" id="ocr-panel">
+      <div class="section-head">
+        <h2>OCR Nota</h2>
+        <span class="status status-${escapeHtml(ocr.status)}" id="ocr-status-badge">${escapeHtml(ocrStatusLabel(ocr.status))}</span>
+      </div>
+
+      <div class="summary ocr-summary">
+        <div>
+          <span>Kode Nota</span>
+          <strong id="ocr-nota-order-code">${escapeHtml(ocr.nota_order_code || '-')}</strong>
+        </div>
+        <div>
+          <span>Tanggal Nota</span>
+          <strong id="ocr-nota-date">${escapeHtml(ocr.nota_date || '-')}</strong>
+        </div>
+        <div>
+          <span>Item Terdeteksi</span>
+          <strong id="ocr-item-count">${escapeHtml(ocr.item_count_detected ?? '-')} / ${escapeHtml(order.item_count)}</strong>
+        </div>
+        <div>
+          <span>Validasi Jumlah</span>
+          <strong><span class="status ${matchClass}" id="ocr-item-match">${escapeHtml(matchLabel)}</span></strong>
+        </div>
+        <div>
+          <span>Engine</span>
+          <strong id="ocr-engine">${escapeHtml(ocr.ocr_engine || '-')}</strong>
+        </div>
+        <div>
+          <span>Confidence</span>
+          <strong id="ocr-confidence">${escapeHtml(formatOcrConfidence(ocr.ocr_confidence))}</strong>
+        </div>
+        <div>
+          <span>Customer ID</span>
+          <code id="ocr-customer-id">${escapeHtml(ocr.customer_anon_id || '-')}</code>
+        </div>
+      </div>
+
+      ${ocr.error_message ? `<div class="alert" id="ocr-error-alert" role="alert">${escapeHtml(ocr.error_message)}</div>` : '<div class="alert hidden" id="ocr-error-alert" role="alert"></div>'}
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Produk</th>
+              <th>Qty</th>
+              <th>Ukuran</th>
+              <th>Nama File</th>
+            </tr>
+          </thead>
+          <tbody id="ocr-items-body">${itemRows}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function layout({ title, body, scripts = '', authPage = false }) {
   const uploadOverlay = authPage ? '' : `
     <div id="upload-overlay" class="upload-overlay hidden" aria-hidden="true" role="dialog" aria-labelledby="upload-overlay-title" aria-modal="true">
@@ -133,6 +246,40 @@ export function loginView({ error = '', step = 'password', username = '' } = {})
   });
 }
 
+export function googleDriveOAuthResultView({ success, refreshToken = '', redirectUri = '', error = '' } = {}) {
+  return layout({
+    title: success ? 'Google Drive Terhubung' : 'Setup Google Drive Gagal',
+    authPage: true,
+    body: `
+      <main class="shell narrow">
+        <section class="panel auth-panel">
+          <p class="eyebrow">Google Drive OAuth</p>
+          <h1>${success ? 'Refresh Token Siap' : 'Setup Gagal'}</h1>
+
+          ${success ? `
+            <div class="notice">
+              Copy refresh token di bawah ke file <code>.env</code> server, lalu restart app.
+            </div>
+            <div class="field">
+              <strong>Redirect URI</strong>
+              <code>${escapeHtml(redirectUri)}</code>
+            </div>
+            <div class="field">
+              <strong>GOOGLE_REFRESH_TOKEN</strong>
+              <textarea readonly rows="4" class="token-box">${escapeHtml(refreshToken)}</textarea>
+            </div>
+            <p class="upload-note">Setelah disimpan, jalankan: <code>pm2 restart upload-desain</code></p>
+            <a class="primary-button full-width" href="/">Kembali ke Dashboard</a>
+          ` : `
+            <div class="alert" role="alert">${escapeHtml(error)}</div>
+            <a class="secondary-button full-width" href="/">Kembali</a>
+          `}
+        </section>
+      </main>
+    `
+  });
+}
+
 export function setupTotpView({ username, qrDataUrl, secret, isFirstSetup = true, error = '' } = {}) {
   return layout({
     title: 'Setup TOTP — Dataset Intake',
@@ -190,7 +337,7 @@ export function orderFormView({ error = '', notice = '', orders = [], maxFileMb 
             <div>
               <p class="eyebrow">Dataset Intake System</p>
               <h1>Order Baru</h1>
-              <p class="subtitle">Upload nota PDF dan design JPEG. File disimpan ke Google Drive secara otomatis.</p>
+              <p class="subtitle">Upload nota PDF dulu — sistem membaca item otomatis, lalu upload design JPEG sesuai produk di nota.</p>
             </div>
             ${userBar(username)}
           </div>
@@ -207,43 +354,59 @@ export function orderFormView({ error = '', notice = '', orders = [], maxFileMb 
                   <small>File nota dalam format PDF</small>
                 </div>
               </div>
-              <label class="file-drop" data-field="nota">
+              <label class="file-drop" data-field="nota" id="nota-drop">
                 <input type="file" name="nota" accept="application/pdf,.pdf" required hidden>
                 <div class="file-drop-content">
                   <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                   <span class="file-drop-text">Klik atau seret file PDF ke sini</span>
-                  <span class="file-drop-hint">Maks. ${escapeHtml(maxFileLabel)}</span>
+                  <span class="file-drop-hint">Nota dibaca otomatis untuk menentukan jumlah design. Maks. ${escapeHtml(maxFileLabel)}</span>
                 </div>
                 <div class="file-selected hidden"></div>
               </label>
+
+              <div id="nota-scan-status" class="nota-scan-status hidden" aria-live="polite"></div>
             </div>
 
-            <div class="form-section">
-              <div class="section-label">
-                <span class="step-badge">2</span>
-                <div>
-                  <strong>Jumlah Item</strong>
-                  <small>Berapa design yang akan diupload (1–${maxItems})</small>
+            <div id="auto-upload-section" class="auto-upload-section hidden">
+              <div class="form-section">
+                <div class="section-label">
+                  <span class="step-badge">2</span>
+                  <div>
+                    <strong>Ringkasan Nota</strong>
+                    <small>Jumlah item diambil otomatis dari PDF nota</small>
+                  </div>
                 </div>
+                <div class="nota-summary">
+                  <div>
+                    <span>Kode Nota</span>
+                    <strong id="preview-nota-order-code">-</strong>
+                  </div>
+                  <div>
+                    <span>Tanggal</span>
+                    <strong id="preview-nota-date">-</strong>
+                  </div>
+                  <div>
+                    <span>Jumlah Item</span>
+                    <strong id="preview-item-count">-</strong>
+                  </div>
+                </div>
+                <input id="item-count" type="hidden" name="item_count" value="1">
               </div>
-              <label class="field count-field">
-                <input id="item-count" type="number" name="item_count" min="1" max="${maxItems}" value="1" required>
-              </label>
-            </div>
 
-            <div class="form-section">
-              <div class="section-label">
-                <span class="step-badge">3</span>
-                <div>
-                  <strong>Design per Item</strong>
-                  <small>Satu file JPEG/JPG per item</small>
+              <div class="form-section">
+                <div class="section-label">
+                  <span class="step-badge">3</span>
+                  <div>
+                    <strong>Upload Design per Produk</strong>
+                    <small>Satu file JPEG/JPG untuk setiap item di nota</small>
+                  </div>
                 </div>
+                <div id="design-fields" class="design-list"></div>
               </div>
-              <div id="design-fields" class="design-list"></div>
             </div>
 
             <div class="form-actions">
-              <button type="submit" id="submit-btn" class="primary-button">
+              <button type="submit" id="submit-btn" class="primary-button" disabled>
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                 Upload &amp; Buat Order
               </button>
@@ -339,7 +502,7 @@ export function orderDetailView(order, { username = '' } = {}) {
             </div>
           </div>
 
-          <div id="status-tracker" class="status-tracker" data-order-code="${escapeHtml(order.order_code)}" data-status="${escapeHtml(order.status)}">
+          <div id="status-tracker" class="status-tracker" data-order-code="${escapeHtml(order.order_code)}" data-status="${escapeHtml(order.status)}" data-ocr-status="${escapeHtml(order.ocr?.status || '')}">
             <div class="progress-section ${isProcessing ? '' : 'hidden'}" id="progress-section">
               <div class="progress-header">
                 <span id="progress-label">Memproses upload ke Google Drive...</span>
@@ -398,6 +561,8 @@ export function orderDetailView(order, { username = '' } = {}) {
               </table>
             </div>
           </div>
+
+          ${renderOcrSection(order)}
         </section>
       </main>
     `
