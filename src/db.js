@@ -607,6 +607,99 @@ export async function getNotaOcrByOrderCode(orderCode) {
   };
 }
 
+export async function countDesignFilesForOrder(orderId) {
+  const [[row]] = await getPool().execute(
+    `
+      SELECT COUNT(*) AS total
+      FROM order_files
+      WHERE order_id = :orderId
+        AND file_role = 'design'
+    `,
+    { orderId }
+  );
+
+  return row.total;
+}
+
+export async function updateOrderItemCount(orderId, itemCount) {
+  await getPool().execute(
+    'UPDATE orders SET item_count = :itemCount WHERE id = :orderId',
+    { orderId, itemCount }
+  );
+}
+
+export async function getOrderFileById(fileId, orderCode) {
+  const [[file]] = await getPool().execute(
+    `
+      SELECT *
+      FROM order_files
+      WHERE id = :fileId
+        AND order_code = :orderCode
+      LIMIT 1
+    `,
+    { fileId, orderCode }
+  );
+
+  return file || null;
+}
+
+export async function deleteOrderFileById(fileId) {
+  await getPool().execute(
+    'DELETE FROM order_files WHERE id = :fileId',
+    { fileId }
+  );
+}
+
+export async function deleteOcrItemByLineIndex(ocrResultId, lineIndex) {
+  await getPool().execute(
+    `
+      DELETE FROM nota_ocr_items
+      WHERE ocr_result_id = :ocrResultId
+        AND line_index = :lineIndex
+    `,
+    { ocrResultId, lineIndex }
+  );
+}
+
+export async function recalculateOcrItemTotals(orderCode, itemCountExpected = null) {
+  const [[ocr]] = await getPool().execute(
+    'SELECT * FROM nota_ocr_results WHERE order_code = :orderCode LIMIT 1',
+    { orderCode }
+  );
+
+  if (!ocr) {
+    return null;
+  }
+
+  const [[countRow]] = await getPool().execute(
+    'SELECT COUNT(*) AS total FROM nota_ocr_items WHERE ocr_result_id = :ocrResultId',
+    { ocrResultId: ocr.id }
+  );
+
+  const detected = countRow.total > 0 ? countRow.total : ocr.item_count_detected;
+  const expected = itemCountExpected ?? ocr.item_count_expected;
+  const itemCountMatch = detected === null ? null : detected === expected;
+
+  await getPool().execute(
+    `
+      UPDATE nota_ocr_results
+      SET
+        item_count_detected = :itemCountDetected,
+        item_count_expected = :itemCountExpected,
+        item_count_match = :itemCountMatch
+      WHERE id = :ocrResultId
+    `,
+    {
+      ocrResultId: ocr.id,
+      itemCountDetected: detected,
+      itemCountExpected: expected,
+      itemCountMatch: itemCountMatch === null ? null : itemCountMatch ? 1 : 0
+    }
+  );
+
+  return getNotaOcrByOrderCode(orderCode);
+}
+
 export function buildFileKey(file) {
   return `${file.file_role}:${file.item_index ?? 0}:${file.design_index ?? 0}`;
 }

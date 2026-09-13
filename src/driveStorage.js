@@ -55,6 +55,16 @@ export async function findFileByName(name, parentId) {
   return findChildByName(name, parentId);
 }
 
+export async function deleteDriveFile(fileId) {
+  if (!fileId) return;
+
+  const drive = getDriveClient();
+  await drive.files.delete({
+    fileId,
+    supportsAllDrives: true
+  });
+}
+
 export async function createFolder(name, parentId = config.drive.parentFolderId) {
   return getOrCreateFolder(name, parentId);
 }

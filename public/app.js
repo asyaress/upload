@@ -698,16 +698,26 @@ if (statusTracker) {
   }
 
   function updateFilesTable(files) {
-    if (!filesTableBody || !files.length) return;
+    if (!filesTableBody) return;
+
+    if (!files.length) {
+      filesTableBody.innerHTML = '<tr><td colspan="7" class="empty">Belum ada file.</td></tr>';
+      return;
+    }
 
     filesTableBody.innerHTML = files.map((file) => `
-      <tr>
+      <tr data-file-id="${file.id}">
         <td><span class="role-badge role-${file.fileRole}">${file.fileRole}</span></td>
         <td>${file.itemIndex ?? '-'}</td>
         <td>${file.designIndex ?? '-'}</td>
         <td>${file.storedFileName}</td>
         <td>${formatBytes(file.sizeBytes)}</td>
         <td><code class="drive-id">${file.googleDriveFileId}</code></td>
+        <td>
+          ${file.fileRole === 'design'
+            ? `<button type="button" class="danger-button small-button delete-file-btn" data-file-id="${file.id}" data-order-code="${orderCode}">Hapus</button>`
+            : '-'}
+        </td>
       </tr>
     `).join('');
   }
@@ -745,6 +755,16 @@ if (statusTracker) {
 
       if (fileCount) {
         fileCount.textContent = `${data.files.length} / ${data.itemCount + 1}`;
+      }
+
+      const summaryItemCount = document.getElementById('summary-item-count');
+      if (summaryItemCount) {
+        summaryItemCount.textContent = String(data.itemCount);
+      }
+
+      const adminItemCount = document.getElementById('admin-item-count');
+      if (adminItemCount) {
+        adminItemCount.value = String(data.itemCount);
       }
 
       if (driveFolder && data.googleDriveFolderId) {
@@ -890,3 +910,102 @@ if (document.readyState === 'loading') {
 } else {
   showServerErrorAlert();
 }
+
+/* ===== Order Admin (override item count & delete design) ===== */
+
+const orderItemCountForm = document.querySelector('#order-item-count-form');
+const orderAdminPanel = document.querySelector('#order-admin-panel');
+
+if (orderItemCountForm && orderAdminPanel) {
+  orderItemCountForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const orderCode = orderAdminPanel.dataset.orderCode;
+    const itemCountInput = document.querySelector('#admin-item-count');
+    const itemCount = Number.parseInt(itemCountInput?.value, 10);
+
+    try {
+      const response = await fetch(`/api/orders/${orderCode}/item-count`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemCount })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Gagal memperbarui jumlah item.');
+      }
+
+      await Swal.fire({
+        ...SWAL_DEFAULTS,
+        icon: 'success',
+        title: 'Jumlah Item Diperbarui',
+        text: `Order ${data.orderCode} sekarang ${data.itemCount} item.`,
+        confirmButtonText: 'OK'
+      });
+
+      window.location.reload();
+    } catch (error) {
+      await Swal.fire({
+        ...SWAL_DEFAULTS,
+        icon: 'error',
+        title: 'Gagal',
+        text: error.message,
+        confirmButtonText: 'OK'
+      });
+    }
+  });
+}
+
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('.delete-file-btn');
+  if (!button) return;
+
+  const orderCode = button.dataset.orderCode;
+  const fileId = button.dataset.fileId;
+
+  const confirm = await Swal.fire({
+    ...SWAL_DEFAULTS,
+    title: 'Hapus file design?',
+    text: 'File akan dihapus dari database, server, dan Google Drive jika memungkinkan.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Ya, Hapus',
+    cancelButtonText: 'Batal'
+  });
+
+  if (!confirm.isConfirmed) return;
+
+  button.disabled = true;
+
+  try {
+    const response = await fetch(`/api/orders/${orderCode}/files/${fileId}`, {
+      method: 'DELETE'
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Gagal menghapus file.');
+    }
+
+    await Swal.fire({
+      ...SWAL_DEFAULTS,
+      icon: 'success',
+      title: 'File Dihapus',
+      text: data.message,
+      confirmButtonText: 'OK'
+    });
+
+    window.location.reload();
+  } catch (error) {
+    button.disabled = false;
+
+    await Swal.fire({
+      ...SWAL_DEFAULTS,
+      icon: 'error',
+      title: 'Gagal',
+      text: error.message,
+      confirmButtonText: 'OK'
+    });
+  }
+});

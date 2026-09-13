@@ -190,7 +190,7 @@ function layout({ title, body, scripts = '', authPage = false }) {
 
 function recentOrderRows(orders) {
   if (!orders.length) {
-    return '<tr><td colspan="5" class="empty">Belum ada order.</td></tr>';
+    return '<tr><td colspan="6" class="empty">Belum ada order.</td></tr>';
   }
 
   return orders.map((order) => `
@@ -200,6 +200,7 @@ function recentOrderRows(orders) {
       <td>${escapeHtml(order.file_count)}</td>
       <td><span class="status status-${escapeHtml(order.status)}">${escapeHtml(statusLabel(order.status))}</span></td>
       <td>${escapeHtml(formatDate(order.created_at))}</td>
+      <td><a class="secondary-button small-button" href="/orders/${escapeHtml(order.order_code)}">Kelola</a></td>
     </tr>
   `).join('');
 }
@@ -432,6 +433,7 @@ export function orderFormView({ error = '', notice = '', orders = [], maxFileMb 
                   <th>File</th>
                   <th>Status</th>
                   <th>Tanggal</th>
+                  <th>Aksi</th>
                 </tr>
               </thead>
               <tbody>${recentOrderRows(orders)}</tbody>
@@ -469,22 +471,28 @@ export function acceptedView(orderJob) {
   });
 }
 
-export function orderDetailView(order, { username = '' } = {}) {
+export function orderDetailView(order, { username = '', maxItems = 50 } = {}) {
   const isProcessing = order.status === 'processing';
   const isFailed = order.status === 'failed';
+  const designFileCount = order.files.filter((file) => file.file_role === 'design').length;
 
   const rows = order.files.length
     ? order.files.map((file) => `
-      <tr>
+      <tr data-file-id="${escapeHtml(file.id)}">
         <td><span class="role-badge role-${escapeHtml(file.file_role)}">${escapeHtml(file.file_role)}</span></td>
         <td>${escapeHtml(file.item_index ?? '-')}</td>
         <td>${escapeHtml(file.design_index ?? '-')}</td>
         <td>${escapeHtml(file.stored_file_name)}</td>
         <td>${escapeHtml(formatBytes(file.size_bytes))}</td>
         <td><code class="drive-id">${escapeHtml(file.google_drive_file_id)}</code></td>
+        <td>
+          ${file.file_role === 'design'
+            ? `<button type="button" class="danger-button small-button delete-file-btn" data-file-id="${escapeHtml(file.id)}" data-order-code="${escapeHtml(order.order_code)}">Hapus</button>`
+            : '-'}
+        </td>
       </tr>
     `).join('')
-    : `<tr><td colspan="6" class="empty">${isProcessing ? 'Metadata file belum masuk. Worker sedang memproses...' : 'Belum ada file.'}</td></tr>`;
+    : `<tr><td colspan="7" class="empty">${isProcessing ? 'Metadata file belum masuk. Worker sedang memproses...' : 'Belum ada file.'}</td></tr>`;
 
   return layout({
     title: `${order.order_code} — Status`,
@@ -521,7 +529,7 @@ export function orderDetailView(order, { username = '' } = {}) {
               </div>
               <div>
                 <span>Jumlah Item</span>
-                <strong>${escapeHtml(order.item_count)}</strong>
+                <strong id="summary-item-count">${escapeHtml(order.item_count)}</strong>
               </div>
               <div>
                 <span>Total File</span>
@@ -545,6 +553,28 @@ export function orderDetailView(order, { username = '' } = {}) {
               </div>
             ` : ''}
 
+            <section class="order-admin-panel" id="order-admin-panel" data-order-code="${escapeHtml(order.order_code)}" data-design-count="${escapeHtml(designFileCount)}">
+              <div class="section-head">
+                <h2>Kelola Order</h2>
+              </div>
+              <form id="order-item-count-form" class="order-admin-form">
+                <label class="field count-field">
+                  <strong>Override Jumlah Item</strong>
+                  <small>Minimal harus sama dengan jumlah file design yang masih ada (${escapeHtml(designFileCount)}).</small>
+                  <input
+                    id="admin-item-count"
+                    type="number"
+                    min="${escapeHtml(Math.max(designFileCount, 1))}"
+                    max="${escapeHtml(maxItems)}"
+                    value="${escapeHtml(order.item_count)}"
+                    required
+                  >
+                </label>
+                <button type="submit" class="secondary-button">Simpan Jumlah Item</button>
+              </form>
+              <p class="upload-note">Hapus file design per baris di tabel bawah. Nota tidak bisa dihapus dari sini.</p>
+            </section>
+
             <div class="table-wrap">
               <table>
                 <thead>
@@ -555,6 +585,7 @@ export function orderDetailView(order, { username = '' } = {}) {
                     <th>File</th>
                     <th>Ukuran</th>
                     <th>Drive File ID</th>
+                    <th>Aksi</th>
                   </tr>
                 </thead>
                 <tbody id="files-table-body">${rows}</tbody>

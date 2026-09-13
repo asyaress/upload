@@ -628,6 +628,41 @@ input:focus {
   margin-bottom: 14px;
 }
 
+.order-admin-panel {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.order-admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.order-admin-form .field {
+  flex: 1 1 220px;
+}
+
+.danger-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #f1b4b0;
+  border-radius: 8px;
+  background: #fff1f1;
+  color: #b42318;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-button:hover {
+  background: #ffe4e4;
+}
+
 /* ===== Status Badges ===== */
 .status {
   display: inline-flex;

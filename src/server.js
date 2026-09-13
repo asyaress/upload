@@ -18,6 +18,7 @@ import {
 import { getOrderDetail, getUserById, initializeDatabase, listRecentOrders, markOrderFailed } from './db.js';
 import { prepareNotaCopyForOcr } from './notaOcrService.js';
 import { previewNotaFromPath } from './notaPreviewService.js';
+import { deleteOrderDesignFile, overrideOrderItemCount } from './orderAdminService.js';
 import { createOrderForBackgroundUpload, parseAndValidateUpload } from './orderService.js';
 import {
   enqueueNotaOcrJob,
@@ -363,7 +364,10 @@ app.get('/orders/:orderCode', async (request, response) => {
     return;
   }
 
-  response.send(orderDetailView(order, { username: request.session.username }));
+  response.send(orderDetailView(order, {
+    username: request.session.username,
+    maxItems: config.maxItems
+  }));
 });
 
 app.get('/api/orders/:orderCode/status', async (request, response) => {
@@ -418,6 +422,7 @@ app.get('/api/orders/:orderCode/status', async (request, response) => {
       fileTotalBytes: progress.fileTotalBytes ?? 0
     },
     files: order.files.map((file) => ({
+      id: file.id,
       fileRole: file.file_role,
       itemIndex: file.item_index,
       designIndex: file.design_index,
@@ -428,6 +433,57 @@ app.get('/api/orders/:orderCode/status', async (request, response) => {
     createdAt: order.created_at,
     updatedAt: order.updated_at
   });
+});
+
+app.patch('/api/orders/:orderCode/item-count', async (request, response) => {
+  try {
+    const order = await overrideOrderItemCount(
+      request.params.orderCode,
+      request.body?.itemCount
+    );
+
+    response.json({
+      success: true,
+      orderCode: order.order_code,
+      itemCount: order.item_count,
+      message: 'Jumlah item order diperbarui.'
+    });
+  } catch (error) {
+    response.status(400).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.delete('/api/orders/:orderCode/files/:fileId', async (request, response) => {
+  try {
+    const order = await deleteOrderDesignFile(
+      request.params.orderCode,
+      request.params.fileId
+    );
+
+    response.json({
+      success: true,
+      orderCode: order.order_code,
+      itemCount: order.item_count,
+      files: order.files.map((file) => ({
+        id: file.id,
+        fileRole: file.file_role,
+        itemIndex: file.item_index,
+        designIndex: file.design_index,
+        storedFileName: file.stored_file_name,
+        sizeBytes: file.size_bytes,
+        googleDriveFileId: file.google_drive_file_id
+      })),
+      message: 'File design dihapus.'
+    });
+  } catch (error) {
+    response.status(400).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 app.post('/api/orders/:orderCode/retry', async (request, response) => {
