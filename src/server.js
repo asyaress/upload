@@ -12,10 +12,16 @@ import {
   buildTotpQrDataUrl,
   requireAuth,
   requirePendingLogin,
-  verifyPassword,
-  verifyTotpCode
+  verifyPassword
 } from './auth.js';
-import { getOrderDetail, getUserById, initializeDatabase, listRecentOrders, markOrderFailed } from './db.js';
+import {
+  getOrderDetail,
+  getUserById,
+  initializeDatabase,
+  listRecentOrders,
+  listTotpDevices,
+  markOrderFailed
+} from './db.js';
 import { prepareNotaCopyForOcr } from './notaOcrService.js';
 import { previewNotaFromPath } from './notaPreviewService.js';
 import { deleteOrderDesignFile, overrideOrderItemCount } from './orderAdminService.js';
@@ -40,8 +46,11 @@ import {
   loginView,
   orderDetailView,
   orderFormView,
-  setupTotpView
+  setupTotpView,
+  totpAddDeviceView,
+  totpSettingsView
 } from './views.js';
+import { registerTotpDevice, removeTotpDevice, verifyTotpForUser } from './totpService.js';
 
 if (!config.auth.sessionSecret) {
   throw new Error('SESSION_SECRET wajib diisi di .env (minimal 32 karakter acak).');
@@ -192,12 +201,13 @@ app.post('/login/totp', async (request, response) => {
 
   const user = await getUserById(pendingUserId);
 
-  if (!user?.totp_enabled || !user.totp_secret) {
+  if (!user?.totp_enabled) {
     response.redirect('/login?error=Akun belum siap untuk TOTP.');
     return;
   }
 
-  if (!verifyTotpCode(user.totp_secret, code)) {
+  const totpValid = await verifyTotpForUser(user.id, code);
+  if (!totpValid) {
     response.redirect(`/login?step=totp&username=${encodeURIComponent(user.username)}&error=Kode TOTP tidak valid.`);
     return;
   }
@@ -241,7 +251,7 @@ app.get('/setup-totp', requirePendingLogin, async (request, response) => {
 });
 
 app.post('/setup-totp', requirePendingLogin, async (request, response) => {
-  const { code } = request.body;
+  const { code, device_label: deviceLabel } = request.body;
   const userId = request.session.pendingUserId;
   const secret = request.session.pendingTotpSecret;
 
@@ -251,11 +261,86 @@ app.post('/setup-totp', requirePendingLogin, async (request, response) => {
   }
 
   try {
-    const user = await completeTotpSetup(userId, secret, code);
+    const user = await completeTotpSetup(userId, secret, code, deviceLabel);
+    request.session.pendingTotpSecret = undefined;
     establishSession(request, user);
     response.redirect('/?notice=TOTP berhasil diaktifkan.');
   } catch (error) {
     response.redirect(`/setup-totp?error=${encodeURIComponent(error.message)}`);
+  }
+});
+
+app.get('/settings/totp', requireAuth, async (request, response) => {
+  const devices = await listTotpDevices(request.session.userId);
+
+  response.send(totpSettingsView({
+    username: request.session.username,
+    devices,
+    notice: request.query.notice || '',
+    error: request.query.error || ''
+  }));
+});
+
+app.get('/settings/totp/add', requireAuth, async (request, response) => {
+  const user = await getUserById(request.session.userId);
+  if (!user) {
+    response.redirect('/login');
+    return;
+  }
+
+  const deviceLabel = request.query.label || `Perangkat ${(await listTotpDevices(user.id)).length + 1}`;
+  const secret = generateTotpSecret(user.username, deviceLabel);
+  request.session.pendingTotpAddSecret = secret.base32;
+  request.session.pendingTotpAddLabel = deviceLabel;
+
+  const qrDataUrl = await buildTotpQrDataUrl(secret.otpauth_url);
+
+  response.send(totpAddDeviceView({
+    username: user.username,
+    qrDataUrl,
+    secret: secret.base32,
+    deviceLabel,
+    error: request.query.error || ''
+  }));
+});
+
+app.post('/settings/totp/add', requireAuth, async (request, response) => {
+  const { code, device_label: deviceLabel } = request.body;
+  const secret = request.session.pendingTotpAddSecret;
+
+  if (!secret) {
+    response.redirect('/settings/totp/add?error=Sesi pendaftaran perangkat kedaluwarsa.');
+    return;
+  }
+
+  try {
+    const label = deviceLabel || request.session.pendingTotpAddLabel;
+    await registerTotpDevice({
+      userId: request.session.userId,
+      totpSecret: secret,
+      token: code,
+      deviceLabel: label
+    });
+
+    request.session.pendingTotpAddSecret = undefined;
+    request.session.pendingTotpAddLabel = undefined;
+
+    response.redirect('/settings/totp?notice=Perangkat TOTP baru berhasil didaftarkan.');
+  } catch (error) {
+    response.redirect(`/settings/totp/add?error=${encodeURIComponent(error.message)}`);
+  }
+});
+
+app.post('/settings/totp/devices/:deviceId/delete', requireAuth, async (request, response) => {
+  try {
+    await removeTotpDevice({
+      userId: request.session.userId,
+      deviceId: request.params.deviceId
+    });
+
+    response.redirect('/settings/totp?notice=Perangkat TOTP dihapus.');
+  } catch (error) {
+    response.redirect(`/settings/totp?error=${encodeURIComponent(error.message)}`);
   }
 });
 

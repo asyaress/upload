@@ -205,6 +205,51 @@ export async function initializeDatabase() {
   }
 
   await ensureNotaOcrTables();
+  await ensureUserTotpDevicesTable();
+  await migrateLegacyTotpSecretsToDevices();
+}
+
+async function ensureUserTotpDevicesTable() {
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS user_totp_devices (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id BIGINT UNSIGNED NOT NULL,
+      device_label VARCHAR(64) NOT NULL,
+      totp_secret VARCHAR(128) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_used_at TIMESTAMP NULL DEFAULT NULL,
+      PRIMARY KEY (id),
+      KEY idx_user_totp_devices_user_id (user_id),
+      CONSTRAINT fk_user_totp_devices_user_id
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
+    )
+  `);
+}
+
+async function migrateLegacyTotpSecretsToDevices() {
+  const [users] = await getPool().execute(
+    `
+      SELECT u.id, u.totp_secret
+      FROM users u
+      WHERE u.totp_enabled = 1
+        AND u.totp_secret IS NOT NULL
+        AND u.totp_secret != ''
+        AND NOT EXISTS (
+          SELECT 1 FROM user_totp_devices d WHERE d.user_id = u.id LIMIT 1
+        )
+    `
+  );
+
+  for (const user of users) {
+    await getPool().execute(
+      `
+        INSERT INTO user_totp_devices (user_id, device_label, totp_secret)
+        VALUES (:userId, 'Perangkat utama', :totpSecret)
+      `,
+      { userId: user.id, totpSecret: user.totp_secret }
+    );
+  }
 }
 
 /* ===== Users ===== */
@@ -242,6 +287,102 @@ export async function enableTotpForUser(userId, totpSecret) {
   await getPool().execute(
     'UPDATE users SET totp_secret = :totpSecret, totp_enabled = 1 WHERE id = :userId',
     { userId, totpSecret }
+  );
+}
+
+export async function listTotpDevices(userId) {
+  const [rows] = await getPool().execute(
+    `
+      SELECT id, user_id, device_label, created_at, last_used_at
+      FROM user_totp_devices
+      WHERE user_id = :userId
+      ORDER BY created_at ASC
+    `,
+    { userId }
+  );
+
+  return rows;
+}
+
+export async function getTotpDeviceSecrets(userId) {
+  const [rows] = await getPool().execute(
+    `
+      SELECT id, totp_secret
+      FROM user_totp_devices
+      WHERE user_id = :userId
+      ORDER BY created_at ASC
+    `,
+    { userId }
+  );
+
+  return rows;
+}
+
+export async function addTotpDevice({ userId, deviceLabel, totpSecret }) {
+  const [result] = await getPool().execute(
+    `
+      INSERT INTO user_totp_devices (user_id, device_label, totp_secret)
+      VALUES (:userId, :deviceLabel, :totpSecret)
+    `,
+    { userId, deviceLabel, totpSecret }
+  );
+
+  await getPool().execute(
+    'UPDATE users SET totp_secret = :totpSecret, totp_enabled = 1 WHERE id = :userId',
+    { userId, totpSecret }
+  );
+
+  return result.insertId;
+}
+
+export async function touchTotpDevice(deviceId) {
+  await getPool().execute(
+    'UPDATE user_totp_devices SET last_used_at = CURRENT_TIMESTAMP WHERE id = :deviceId',
+    { deviceId }
+  );
+}
+
+export async function deleteTotpDevice(userId, deviceId) {
+  const [result] = await getPool().execute(
+    'DELETE FROM user_totp_devices WHERE id = :deviceId AND user_id = :userId',
+    { deviceId, userId }
+  );
+
+  return result.affectedRows > 0;
+}
+
+export async function countTotpDevices(userId) {
+  const [[row]] = await getPool().execute(
+    'SELECT COUNT(*) AS total FROM user_totp_devices WHERE user_id = :userId',
+    { userId }
+  );
+
+  return row.total;
+}
+
+export async function syncPrimaryTotpSecret(userId) {
+  const [[device]] = await getPool().execute(
+    `
+      SELECT totp_secret
+      FROM user_totp_devices
+      WHERE user_id = :userId
+      ORDER BY created_at ASC
+      LIMIT 1
+    `,
+    { userId }
+  );
+
+  if (!device) {
+    await getPool().execute(
+      'UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = :userId',
+      { userId }
+    );
+    return;
+  }
+
+  await getPool().execute(
+    'UPDATE users SET totp_secret = :totpSecret, totp_enabled = 1 WHERE id = :userId',
+    { userId, totpSecret: device.totp_secret }
   );
 }
 

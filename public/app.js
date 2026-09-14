@@ -9,6 +9,9 @@ const submitBtn = document.querySelector('#submit-btn');
 const previewNotaOrderCode = document.querySelector('#preview-nota-order-code');
 const previewNotaDate = document.querySelector('#preview-nota-date');
 const previewItemCount = document.querySelector('#preview-item-count');
+const flowStepper = document.querySelector('#flow-stepper');
+const uploadReadiness = document.querySelector('#upload-readiness');
+const uploadReadinessCount = document.querySelector('#upload-readiness-count');
 
 let notaPreview = null;
 let notaScanRequestId = 0;
@@ -154,7 +157,16 @@ window.addEventListener('beforeunload', (event) => {
 
 /* ===== File Drop Zone ===== */
 
-function setupFileDrop(dropEl) {
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function setupFileDrop(dropEl, { onFileSelected, onFileCleared } = {}) {
   const input = dropEl.querySelector('input[type="file"]');
   const content = dropEl.querySelector('.file-drop-content');
   const selected = dropEl.querySelector('.file-selected');
@@ -168,11 +180,13 @@ function setupFileDrop(dropEl) {
     selected.innerHTML = `
       <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="20" height="20"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <div>
-        <div class="file-name">${file.name}</div>
+        <div class="file-name">${escapeHtml(file.name)}</div>
         <div class="file-size">${formatBytes(file.size)}</div>
       </div>
       <button type="button" class="file-remove" aria-label="Hapus file">Hapus</button>
     `;
+
+    dropEl.closest('.design-card')?.classList.add('is-complete');
 
     selected.querySelector('.file-remove').addEventListener('click', (event) => {
       event.preventDefault();
@@ -182,7 +196,13 @@ function setupFileDrop(dropEl) {
       content.classList.remove('hidden');
       selected.classList.add('hidden');
       selected.innerHTML = '';
+      dropEl.closest('.design-card')?.classList.remove('is-complete');
+      if (onFileCleared) onFileCleared();
+      updateUploadReadiness();
     });
+
+    if (onFileSelected) onFileSelected(file);
+    updateUploadReadiness();
   }
 
   input.addEventListener('change', () => {
@@ -214,28 +234,70 @@ function setupFileDrop(dropEl) {
   });
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
+function setFlowStep(activeStep) {
+  if (!flowStepper) return;
+
+  flowStepper.querySelectorAll('.flow-step').forEach((stepEl) => {
+    const step = Number.parseInt(stepEl.dataset.step, 10);
+    stepEl.classList.toggle('is-active', step === activeStep);
+    stepEl.classList.toggle('is-complete', step < activeStep);
+  });
 }
 
-function setSubmitEnabled(enabled) {
-  if (submitBtn) submitBtn.disabled = !enabled;
+function countSelectedDesignFiles() {
+  if (!designFields) return 0;
+
+  let count = 0;
+  designFields.querySelectorAll('input[type="file"]').forEach((input) => {
+    if (input.files?.[0]?.size > 0) count += 1;
+  });
+  return count;
+}
+
+function updateUploadReadiness() {
+  const requiredDesigns = notaPreview?.itemCount
+    || Number.parseInt(itemCountInput?.value, 10)
+    || 0;
+  const selectedDesigns = countSelectedDesignFiles();
+  const notaReady = Boolean(notaPreview?.itemCount);
+  const allDesignsReady = notaReady && requiredDesigns > 0 && selectedDesigns >= requiredDesigns;
+
+  if (uploadReadinessCount) {
+    uploadReadinessCount.textContent = notaReady
+      ? `${selectedDesigns}/${requiredDesigns}`
+      : '0/0';
+  }
+
+  const labelEl = uploadReadiness?.querySelector('.upload-readiness-label');
+  if (labelEl) {
+    if (!notaReady) {
+      labelEl.textContent = 'Mulai dengan upload nota PDF';
+    } else if (selectedDesigns < requiredDesigns) {
+      labelEl.textContent = `Lengkapi design — ${requiredDesigns - selectedDesigns} file lagi`;
+    } else {
+      labelEl.textContent = 'Siap diupload ke server';
+    }
+  }
+
+  uploadReadiness?.classList.toggle('is-ready', allDesignsReady);
+  if (submitBtn) submitBtn.disabled = !allDesignsReady;
 }
 
 function hideAutoUploadSection() {
   autoUploadSection?.classList.add('hidden');
+  autoUploadSection?.classList.remove('is-revealed');
   if (designFields) designFields.innerHTML = '';
-  setSubmitEnabled(false);
+  setFlowStep(1);
+  updateUploadReadiness();
 }
 
 function showAutoUploadSection() {
   autoUploadSection?.classList.remove('hidden');
-  setSubmitEnabled(true);
+  requestAnimationFrame(() => {
+    autoUploadSection?.classList.add('is-revealed');
+  });
+  setFlowStep(3);
+  updateUploadReadiness();
 }
 
 function setNotaScanStatus(kind, message) {
@@ -254,23 +316,21 @@ function clearNotaScanStatus() {
 }
 
 function buildItemInfoHtml(item) {
-  if (!item) {
-    return '<p class="design-item-hint">Upload design JPEG untuk item ini.</p>';
-  }
+  const lineIndex = item?.lineIndex ? pad2(item.lineIndex) : '--';
 
   const meta = [];
-  if (item.qty) meta.push(`<span>Qty: ${escapeHtml(item.qty)}</span>`);
-  if (item.sizeText) meta.push(`<span>Ukuran: ${escapeHtml(item.sizeText)}</span>`);
-  if (item.fileNameHint) meta.push(`<span>File nota: ${escapeHtml(item.fileNameHint)}</span>`);
+  if (item?.qty) meta.push(`<span>Qty ${escapeHtml(item.qty)}</span>`);
+  if (item?.sizeText) meta.push(`<span>${escapeHtml(item.sizeText)}</span>`);
+  if (item?.fileNameHint) meta.push(`<span class="meta-file">${escapeHtml(item.fileNameHint)}</span>`);
 
   return `
     <div class="design-item-info">
-      <div class="design-row-head">
-        <strong>Item ${pad2(item.lineIndex)}</strong>
-        <span class="design-product">${escapeHtml(item.productType || 'Produk tidak terbaca')}</span>
+      <div class="design-card-top">
+        <span class="design-index-pill">Item ${lineIndex}</span>
+        <span class="design-status-pill">Menunggu file</span>
       </div>
+      <h3 class="design-product-title">${escapeHtml(item?.productType || 'Produk tidak terbaca')}</h3>
       ${meta.length ? `<div class="design-item-meta">${meta.join('')}</div>` : ''}
-      <p class="design-item-hint">Upload design JPEG yang sesuai produk di atas.</p>
     </div>
   `;
 }
@@ -287,24 +347,42 @@ function renderDesignFields(items = []) {
 
   for (let itemIndex = 1; itemIndex <= safeCount; itemIndex += 1) {
     const item = items[itemIndex - 1] || null;
-    const row = document.createElement('div');
-    row.className = 'design-row';
+    const row = document.createElement('article');
+    row.className = 'design-row design-card';
 
     row.innerHTML = `
       ${buildItemInfoHtml(item ? { ...item, lineIndex: item.lineIndex || itemIndex } : { lineIndex: itemIndex })}
-      <label class="file-drop" data-field="design_${itemIndex}">
+      <label class="file-drop file-drop-compact" data-field="design_${itemIndex}">
         <input type="file" name="design_${itemIndex}" accept="image/jpeg,.jpg,.jpeg" required hidden>
         <div class="file-drop-content">
           <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-          <span class="file-drop-text">Pilih JPEG/JPG untuk item ${pad2(itemIndex)}</span>
+          <span class="file-drop-text">Pilih JPEG untuk item ${pad2(itemIndex)}</span>
         </div>
         <div class="file-selected hidden"></div>
       </label>
     `;
 
     designFields.appendChild(row);
-    setupFileDrop(row.querySelector('.file-drop'));
+    const dropEl = row.querySelector('.file-drop');
+    const statusPill = row.querySelector('.design-status-pill');
+
+    setupFileDrop(dropEl, {
+      onFileSelected: () => {
+        if (statusPill) {
+          statusPill.textContent = 'File dipilih';
+          statusPill.classList.add('is-done');
+        }
+      },
+      onFileCleared: () => {
+        if (statusPill) {
+          statusPill.textContent = 'Menunggu file';
+          statusPill.classList.remove('is-done');
+        }
+      }
+    });
   }
+
+  updateUploadReadiness();
 }
 
 function updateNotaSummary(preview) {
@@ -325,9 +403,10 @@ async function scanNotaFile(file) {
   notaPreview = null;
   hideAutoUploadSection();
 
+  setFlowStep(2);
   setNotaScanStatus(
     'loading',
-    '<span class="nota-scan-spinner" aria-hidden="true"></span> Membaca nota PDF... Mohon tunggu, proses ini bisa memakan waktu untuk nota scan.'
+    '<span class="nota-scan-spinner" aria-hidden="true"></span> Membaca nota… Ini bisa memakan waktu untuk nota scan.'
   );
 
   const formData = new FormData();
@@ -353,7 +432,7 @@ async function scanNotaFile(file) {
 
     setNotaScanStatus(
       'success',
-      `Nota terbaca: <strong>${escapeHtml(data.notaOrderCode || 'Tanpa kode')}</strong> · ${escapeHtml(data.itemCount)} item terdeteksi · engine ${escapeHtml(data.ocrEngine || '-')}`
+      `Nota <strong>${escapeHtml(data.notaOrderCode || 'Tanpa kode')}</strong> · ${escapeHtml(data.itemCount)} item · ${escapeHtml(data.ocrEngine || 'ocr')}`
     );
   } catch (error) {
     if (requestId !== notaScanRequestId) return;
@@ -431,6 +510,8 @@ function setupNotaDrop() {
 
 setupNotaDrop();
 hideAutoUploadSection();
+setFlowStep(1);
+updateUploadReadiness();
 
 /* ===== Client-side Validation ===== */
 

@@ -172,9 +172,6 @@ function layout({ title, body, scripts = '', authPage = false }) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>${escapeHtml(title)}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
     <link rel="stylesheet" href="/styles.css">
   </head>
@@ -304,6 +301,10 @@ export function setupTotpView({ username, qrDataUrl, secret, isFirstSetup = true
 
           <form method="post" action="/setup-totp" class="auth-form">
             <label class="field">
+              <strong>Nama perangkat</strong>
+              <input type="text" name="device_label" maxlength="64" value="Perangkat utama" placeholder="Contoh: iPhone, Laptop kantor" required>
+            </label>
+            <label class="field">
               <strong>Kode verifikasi (6 digit)</strong>
               <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required autofocus>
             </label>
@@ -321,6 +322,7 @@ function userBar(username) {
   return `
     <div class="user-bar">
       <span>${escapeHtml(username)}</span>
+      <a class="secondary-button small-button" href="/settings/totp">Authenticator</a>
       <form method="post" action="/logout" class="logout-form">
         <button type="submit" class="secondary-button small-button">Logout</button>
       </form>
@@ -328,17 +330,37 @@ function userBar(username) {
   `;
 }
 
-export function orderFormView({ error = '', notice = '', orders = [], maxFileMb = 5120, maxFileLabel = '5 GB', maxItems = 50, username = '' } = {}) {
+function formatTotpDeviceDate(value) {
+  if (!value) return 'Belum dipakai';
+  return formatDate(value);
+}
+
+export function totpSettingsView({ username = '', devices = [], notice = '', error = '' } = {}) {
+  const rows = devices.length
+    ? devices.map((device) => `
+      <tr>
+        <td>${escapeHtml(device.device_label)}</td>
+        <td>${escapeHtml(formatDate(device.created_at))}</td>
+        <td>${escapeHtml(formatTotpDeviceDate(device.last_used_at))}</td>
+        <td>
+          <form method="post" action="/settings/totp/devices/${escapeHtml(device.id)}/delete" class="inline-delete-form" onsubmit="return confirm('Hapus perangkat TOTP ini?');">
+            <button type="submit" class="danger-button small-button">Hapus</button>
+          </form>
+        </td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="4" class="empty">Belum ada perangkat terdaftar.</td></tr>';
+
   return layout({
-    title: 'Order Baru — Dataset Intake',
+    title: 'Authenticator — Dataset Intake',
     body: `
-      <main class="shell">
-        <section class="panel hero-panel">
+      <main class="shell narrow">
+        <section class="panel glass-panel">
           <div class="topbar">
             <div>
-              <p class="eyebrow">Dataset Intake System</p>
-              <h1>Order Baru</h1>
-              <p class="subtitle">Upload nota PDF dulu — sistem membaca item otomatis, lalu upload design JPEG sesuai produk di nota.</p>
+              <p class="eyebrow">Keamanan</p>
+              <h1>Perangkat Authenticator</h1>
+              <p class="subtitle">Daftarkan beberapa HP/tablet. Login bisa pakai kode dari perangkat mana pun.</p>
             </div>
             ${userBar(username)}
           </div>
@@ -346,47 +368,141 @@ export function orderFormView({ error = '', notice = '', orders = [], maxFileMb 
           ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
           ${error ? `<div class="alert" role="alert">${escapeHtml(error)}</div>` : ''}
 
-          <form id="order-form" action="/orders" method="post" enctype="multipart/form-data" class="order-form" data-max-file-mb="${maxFileMb}" data-max-items="${maxItems}">
-            <div class="form-section">
-              <div class="section-label">
-                <span class="step-badge">1</span>
-                <div>
-                  <strong>Nota (PDF)</strong>
-                  <small>File nota dalam format PDF</small>
-                </div>
+          <div class="actions">
+            <a class="primary-button" href="/settings/totp/add">+ Daftarkan Perangkat Baru</a>
+            <a class="secondary-button" href="/">Kembali</a>
+          </div>
+
+          <div class="table-wrap table-wrap-soft" style="margin-top: 16px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nama</th>
+                  <th>Didaftarkan</th>
+                  <th>Terakhir dipakai</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    `
+  });
+}
+
+export function totpAddDeviceView({ username = '', qrDataUrl, secret, deviceLabel = '', error = '' } = {}) {
+  return layout({
+    title: 'Daftarkan Perangkat — Dataset Intake',
+    body: `
+      <main class="shell narrow">
+        <section class="panel auth-panel glass-panel">
+          <div class="topbar">
+            <div>
+              <p class="eyebrow">Keamanan</p>
+              <h1>Perangkat Baru</h1>
+              <p class="subtitle">Scan QR di aplikasi authenticator, lalu verifikasi dengan kode 6 digit.</p>
+            </div>
+            <a class="secondary-button small-button" href="/settings/totp">Batal</a>
+          </div>
+
+          ${error ? `<div class="alert" role="alert">${escapeHtml(error)}</div>` : ''}
+
+          <div class="totp-setup">
+            <img src="${escapeHtml(qrDataUrl)}" alt="QR Code TOTP" class="totp-qr">
+            <div class="totp-secret">
+              <span>Secret manual:</span>
+              <code>${escapeHtml(secret)}</code>
+            </div>
+          </div>
+
+          <form method="post" action="/settings/totp/add" class="auth-form">
+            <label class="field">
+              <strong>Nama perangkat</strong>
+              <input type="text" name="device_label" maxlength="64" value="${escapeHtml(deviceLabel)}" placeholder="Contoh: HP cadangan" required>
+            </label>
+            <label class="field">
+              <strong>Kode verifikasi (6 digit)</strong>
+              <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required autofocus>
+            </label>
+            <button type="submit" class="primary-button full-width">Simpan Perangkat</button>
+          </form>
+        </section>
+      </main>
+    `
+  });
+}
+
+export function orderFormView({ error = '', notice = '', orders = [], maxFileMb = 5120, maxFileLabel = '5 GB', maxItems = 50, username = '' } = {}) {
+  return layout({
+    title: 'Order Baru — Dataset Intake',
+    body: `
+      <main class="shell upload-shell">
+        <section class="panel glass-panel upload-hero">
+          <div class="topbar">
+            <div>
+              <p class="eyebrow">Dataset Intake</p>
+              <h1>Order Baru</h1>
+              <p class="subtitle">Tiga langkah: nota PDF → verifikasi ringkasan → upload design per produk.</p>
+            </div>
+            ${userBar(username)}
+          </div>
+
+          ${notice ? `<div class="notice" role="status">${escapeHtml(notice)}</div>` : ''}
+          ${error ? `<div class="alert" role="alert">${escapeHtml(error)}</div>` : ''}
+
+          <nav class="flow-stepper" id="flow-stepper" aria-label="Langkah upload">
+            <div class="flow-step is-active" data-step="1">
+              <span class="flow-step-index">1</span>
+              <span class="flow-step-label">Nota PDF</span>
+            </div>
+            <div class="flow-step" data-step="2">
+              <span class="flow-step-index">2</span>
+              <span class="flow-step-label">Ringkasan</span>
+            </div>
+            <div class="flow-step" data-step="3">
+              <span class="flow-step-index">3</span>
+              <span class="flow-step-label">Design</span>
+            </div>
+          </nav>
+
+          <form id="order-form" action="/orders" method="post" enctype="multipart/form-data" class="order-form upload-wizard" data-max-file-mb="${maxFileMb}" data-max-items="${maxItems}">
+            <div class="wizard-step-card" data-step-card="1">
+              <div class="wizard-step-head">
+                <h2>Upload Nota</h2>
+                <p>PDF dibaca otomatis untuk menentukan jumlah design.</p>
               </div>
-              <label class="file-drop" data-field="nota" id="nota-drop">
+              <label class="file-drop file-drop-hero" data-field="nota" id="nota-drop">
                 <input type="file" name="nota" accept="application/pdf,.pdf" required hidden>
                 <div class="file-drop-content">
-                  <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                  <span class="file-drop-text">Klik atau seret file PDF ke sini</span>
-                  <span class="file-drop-hint">Nota dibaca otomatis untuk menentukan jumlah design. Maks. ${escapeHtml(maxFileLabel)}</span>
+                  <div class="file-drop-icon-wrap" aria-hidden="true">
+                    <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  </div>
+                  <span class="file-drop-text">Ketuk atau seret nota PDF</span>
+                  <span class="file-drop-hint">Maks. ${escapeHtml(maxFileLabel)} per file</span>
                 </div>
                 <div class="file-selected hidden"></div>
               </label>
-
               <div id="nota-scan-status" class="nota-scan-status hidden" aria-live="polite"></div>
             </div>
 
             <div id="auto-upload-section" class="auto-upload-section hidden">
-              <div class="form-section">
-                <div class="section-label">
-                  <span class="step-badge">2</span>
-                  <div>
-                    <strong>Ringkasan Nota</strong>
-                    <small>Jumlah item diambil otomatis dari PDF nota</small>
-                  </div>
+              <div class="wizard-step-card" data-step-card="2">
+                <div class="wizard-step-head">
+                  <h2>Ringkasan Nota</h2>
+                  <p>Pastikan kode order dan jumlah item sudah benar.</p>
                 </div>
-                <div class="nota-summary">
-                  <div>
+                <div class="nota-summary nota-summary-glass">
+                  <div class="summary-tile">
                     <span>Kode Nota</span>
                     <strong id="preview-nota-order-code">-</strong>
                   </div>
-                  <div>
+                  <div class="summary-tile">
                     <span>Tanggal</span>
                     <strong id="preview-nota-date">-</strong>
                   </div>
-                  <div>
+                  <div class="summary-tile summary-tile-accent">
                     <span>Jumlah Item</span>
                     <strong id="preview-item-count">-</strong>
                   </div>
@@ -394,37 +510,37 @@ export function orderFormView({ error = '', notice = '', orders = [], maxFileMb 
                 <input id="item-count" type="hidden" name="item_count" value="1">
               </div>
 
-              <div class="form-section">
-                <div class="section-label">
-                  <span class="step-badge">3</span>
-                  <div>
-                    <strong>Upload Design per Produk</strong>
-                    <small>Satu file JPEG/JPG untuk setiap item di nota</small>
-                  </div>
+              <div class="wizard-step-card" data-step-card="3">
+                <div class="wizard-step-head">
+                  <h2>Design per Produk</h2>
+                  <p>Satu file JPEG/JPG untuk setiap baris di nota.</p>
                 </div>
                 <div id="design-fields" class="design-list"></div>
               </div>
             </div>
 
-            <div class="form-actions">
-              <button type="submit" id="submit-btn" class="primary-button" disabled>
+            <div class="form-actions-sticky">
+              <div id="upload-readiness" class="upload-readiness" aria-live="polite">
+                <span class="upload-readiness-label">Mulai dengan upload nota PDF</span>
+                <span class="upload-readiness-count" id="upload-readiness-count">0/0</span>
+              </div>
+              <button type="submit" id="submit-btn" class="primary-button primary-button-large" disabled>
                 <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                 Upload &amp; Buat Order
               </button>
-              <p class="upload-note">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                Upload berjalan di server. File besar (hingga ${escapeHtml(maxFileLabel)}) didukung.
+              <p class="upload-note upload-note-center">
+                File besar didukung hingga ${escapeHtml(maxFileLabel)}. Jangan tutup halaman saat upload.
               </p>
             </div>
           </form>
         </section>
 
-        <section class="panel">
+        <section class="panel glass-panel">
           <div class="section-head">
             <h2>Order Terbaru</h2>
           </div>
 
-          <div class="table-wrap">
+          <div class="table-wrap table-wrap-soft">
             <table>
               <thead>
                 <tr>

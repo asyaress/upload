@@ -3,12 +3,15 @@ import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import {
   createUser,
-  enableTotpForUser,
   getUserById,
   getUserByUsername,
   getUserCount
 } from './db.js';
+import { registerTotpDevice } from './totpService.js';
+import { verifyTotpCode } from './totpVerify.js';
 import { config } from './config.js';
+
+export { verifyTotpCode };
 
 export async function bootstrapAdminUser() {
   const count = await getUserCount();
@@ -35,9 +38,11 @@ export async function verifyPassword(username, password) {
   return isValid ? user : null;
 }
 
-export function generateTotpSecret(username) {
+export function generateTotpSecret(username, deviceLabel = 'Perangkat') {
+  const label = String(deviceLabel || 'Perangkat').trim() || 'Perangkat';
+
   return speakeasy.generateSecret({
-    name: `Dataset Intake (${username})`,
+    name: `Dataset Intake (${username} - ${label})`,
     issuer: 'Dataset Intake'
   });
 }
@@ -46,21 +51,14 @@ export async function buildTotpQrDataUrl(otpauthUrl) {
   return QRCode.toDataURL(otpauthUrl);
 }
 
-export function verifyTotpCode(secret, token) {
-  return speakeasy.totp.verify({
-    secret,
-    encoding: 'base32',
-    token: String(token).trim(),
-    window: 1
+export async function completeTotpSetup(userId, secret, token, deviceLabel = 'Perangkat utama') {
+  await registerTotpDevice({
+    userId,
+    totpSecret: secret,
+    token,
+    deviceLabel
   });
-}
 
-export async function completeTotpSetup(userId, secret, token) {
-  if (!verifyTotpCode(secret, token)) {
-    throw new Error('Kode TOTP tidak valid. Pastikan waktu perangkat sudah benar.');
-  }
-
-  await enableTotpForUser(userId, secret);
   return getUserById(userId);
 }
 
