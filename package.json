@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "google:auth": "node scripts/google-oauth-setup.js"
+    "google:auth": "node scripts/google-oauth-setup.js",
+    "test": "node --test src/notaOcrParser.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

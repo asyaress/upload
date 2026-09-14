@@ -7,6 +7,7 @@ export function formatPreviewItems(items) {
     productType: item.product_type,
     qty: item.qty,
     sizeText: item.size_text,
+    finishingText: item.finishing_text,
     fileNameHint: item.file_name_hint
   }));
 }

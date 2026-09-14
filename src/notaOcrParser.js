@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { repairNotaExtractedText } from './notaOcrNormalize.js';
 
 const mashedPricePattern = /^(\d{1,3}(?:\.\d{3})+)(\d)(\d{1,3}(?:\.\d{3})+)$/;
 
@@ -17,18 +18,13 @@ export function anonymizeCustomer(customerName) {
 }
 
 function normalizeNotaText(rawText) {
-  return String(rawText || '')
-    .replace(/\r/g, '\n')
-    .replace(/\u00a0/g, ' ')
-    .replace(/(Kode\s*Order\s*:)/gi, '\n$1')
-    .replace(/(Kepada\s*:)/gi, '\n$1')
-    .replace(/(Kasir\s*:)/gi, '\n$1')
-    .replace(/(Keterangan\s*:)/gi, '\n$1')
-    .replace(/(Nama\s+File\s*:)/gi, '\n$1')
-    .replace(/(Ukuran\s*=)/gi, '\n$1')
-    .replace(/(Finishing\s*:)/gi, '\n$1')
-    .replace(/(Total\s*:)/gi, '\n$1')
-    .replace(/ProdukHargaQtyTotal/gi, '\nProdukHargaQtyTotal\n');
+  return repairNotaExtractedText(rawText);
+}
+
+function isFinishingDetailLine(line) {
+  return /^Finishing\s*:/i.test(line)
+    || /^Laminating\s*:/i.test(line)
+    || /^Finishing:/i.test(line);
 }
 
 function parseNotaDate(rawDate) {
@@ -86,7 +82,14 @@ function extractMashedPriceSuffix(line) {
     return null;
   }
 
-  matches.sort((left, right) => left.suffixLength - right.suffixLength);
+  matches.sort((left, right) => {
+    const productLengthDiff = right.productPart.length - left.productPart.length;
+    if (productLengthDiff !== 0) {
+      return productLengthDiff;
+    }
+
+    return right.suffixLength - left.suffixLength;
+  });
   return matches[0];
 }
 
@@ -136,9 +139,46 @@ function isFileNameContinuationLine(line) {
   return false;
 }
 
-function extractProductSection(text) {
-  const match = text.match(/ProdukHargaQtyTotal([\s\S]*?)(?:\nTotal\s*:|$)/i);
+function looksLikeNewProductBlock(lines, startIndex, maxLookahead = 5) {
+  const limit = Math.min(lines.length, startIndex + maxLookahead);
+
+  for (let index = startIndex; index < limit; index += 1) {
+    const line = lines[index];
+    if (/^Total\s*:/i.test(line)) {
+      return false;
+    }
+    if (/^Nama\s+File\s*:/i.test(line) || /^Ukuran\s*=/i.test(line)) {
+      return false;
+    }
+    if (isMashedPriceLine(line)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function extractProductSection(text) {
+  const normalized = normalizeNotaText(text);
+  const match = normalized.match(/ProdukHargaQtyTotal([\s\S]*?)(?:\nTotal\s*:|$)/i);
   return match?.[1] || '';
+}
+
+export function countNotaPriceAnchors(rawText) {
+  const lines = extractProductSection(rawText)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let anchors = 0;
+
+  for (const line of lines) {
+    if (isMashedPriceLine(line) || splitEmbeddedPriceLine(line)) {
+      anchors += 1;
+    }
+  }
+
+  return anchors;
 }
 
 function extractItems(section) {
@@ -193,17 +233,24 @@ function extractItems(section) {
     }
 
     let sizeText = null;
+    let finishingText = null;
+    const finishingParts = [];
     while (
       index < lines.length
       && !isMashedPriceLine(lines[index])
       && !/^Nama\s+File\s*:/i.test(lines[index])
       && !/^Total\s*:/i.test(lines[index])
-      && !/^[A-Za-z].*\d{1,3}(?:\.\d{3})+\d\d{1,3}(?:\.\d{3})+/.test(lines[index])
+      && !splitEmbeddedPriceLine(lines[index])
     ) {
       if (/^Ukuran\s*=/i.test(lines[index])) {
         sizeText = lines[index].replace(/^Ukuran\s*=\s*/i, '').trim();
+      } else if (isFinishingDetailLine(lines[index])) {
+        finishingParts.push(lines[index].replace(/\s+/g, ' ').trim());
       }
       index += 1;
+    }
+    if (finishingParts.length) {
+      finishingText = finishingParts.join(' | ');
     }
 
     let fileNameHint = null;
@@ -211,8 +258,28 @@ function extractItems(section) {
       fileNameHint = lines[index].replace(/^Nama\s+File\s*:\s*/i, '').trim() || null;
       index += 1;
 
-      while (index < lines.length && isFileNameContinuationLine(lines[index])) {
-        const continuation = lines[index].trim();
+      while (index < lines.length) {
+        const continuationLine = lines[index];
+        if (
+          /^Total\s*:/i.test(continuationLine)
+          || /^Nama\s+File\s*:/i.test(continuationLine)
+          || /^Finishing\s*:/i.test(continuationLine)
+          || /^Laminating:/i.test(continuationLine)
+          || isMashedPriceLine(continuationLine)
+          || splitEmbeddedPriceLine(continuationLine)
+        ) {
+          break;
+        }
+        if (looksLikeNewProductBlock(lines, index)) {
+          break;
+        }
+
+        const continuation = continuationLine.trim();
+        if (!continuation) {
+          index += 1;
+          continue;
+        }
+
         fileNameHint = fileNameHint ? `${fileNameHint} ${continuation}` : continuation;
         index += 1;
       }
@@ -228,6 +295,7 @@ function extractItems(section) {
       product_type: productType || null,
       qty,
       size_text: sizeText,
+      finishing_text: finishingText,
       file_name_hint: fileNameHint
     });
   }
@@ -238,7 +306,7 @@ function extractItems(section) {
 export function parseNotaText(rawText) {
   const normalized = normalizeNotaText(rawText);
 
-  const orderMatch = normalized.match(/Kode\s*Order\s*:\s*(ON\d{12})(\d{2}-\d{2}-\d{4})/i)
+  const orderMatch = normalized.match(/Kode\s*Order\s*:\s*(ON\d+)-(\d{2}-\d{2}-\d{4})/i)
     || normalized.match(/Kode\s*Order\s*:\s*(ON\d+)/i);
   const customerMatch = normalized.match(/Kepada\s*:\s*(.+?)(?:\n|Kasir|Keterangan|$)/i);
   const notaDate = orderMatch?.[2]

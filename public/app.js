@@ -321,6 +321,7 @@ function buildItemInfoHtml(item) {
   const meta = [];
   if (item?.qty) meta.push(`<span>Qty ${escapeHtml(item.qty)}</span>`);
   if (item?.sizeText) meta.push(`<span>${escapeHtml(item.sizeText)}</span>`);
+  if (item?.finishingText) meta.push(`<span class="meta-finish">${escapeHtml(item.finishingText)}</span>`);
   if (item?.fileNameHint) meta.push(`<span class="meta-file">${escapeHtml(item.fileNameHint)}</span>`);
 
   return `
