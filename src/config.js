@@ -37,7 +37,8 @@ export const config = {
     adminUsername: process.env.ADMIN_USERNAME || 'admin@gmail.com',
     adminPassword: process.env.ADMIN_PASSWORD || 'password',
     sessionSecret: process.env.SESSION_SECRET || '',
-    sessionMaxAgeHours: intFromEnv('SESSION_MAX_AGE_HOURS', 12)
+    sessionMaxAgeHours: intFromEnv('SESSION_MAX_AGE_HOURS', 12),
+    requireTotp: process.env.AUTH_REQUIRE_TOTP === '1'
   },
   ocr: {
     customerAnonSalt: process.env.CUSTOMER_ANON_SALT || process.env.SESSION_SECRET || 'change-me-ocr-salt',

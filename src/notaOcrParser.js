@@ -94,34 +94,122 @@ function extractMashedPriceSuffix(line) {
 }
 
 const spacedProductRowPattern = /^(.+?)\s+(\d{1,3}(?:\.\d{3})+)\s+(\d{1,4})\s+(\d{1,3}(?:\.\d{3})+)$/;
+const spacedProductRowOcrPattern = /^(.+?)\s+(\d{3,7})\s+(\d{1,4})\s+(\d{1,3}(?:\.\d{3})+|\d{3,7})$/;
 
-function parseSpacedProductLine(line) {
-  const trimmed = String(line || '').trim();
-  const match = trimmed.match(spacedProductRowPattern);
-  if (!match) {
-    return null;
-  }
+function parsePlainNumber(value) {
+  return Number.parseInt(String(value || '').replace(/\./g, ''), 10) || 0;
+}
 
-  const productPart = match[1].trim();
-  const unitPrice = parseIndonesianNumber(match[2]);
-  const qty = Number.parseInt(match[3], 10) || 1;
-  const lineTotal = parseIndonesianNumber(match[4]);
-
-  if (!productPart || !/[A-Za-z]/.test(productPart) || unitPrice < 1000) {
-    return null;
+function validateSpacedPriceRow({ productPart, unitPrice, qty, lineTotal }) {
+  if (!productPart || !/[A-Za-z]/.test(productPart) || unitPrice < 100 || qty < 1) {
+    return false;
   }
 
   if (lineTotal > 0 && unitPrice > 0) {
     const impliedQty = Math.max(1, Math.round(lineTotal / unitPrice));
     if (Math.abs(impliedQty - qty) > 1) {
-      return null;
+      return false;
     }
   }
 
-  return {
-    productPart,
-    qty
-  };
+  return true;
+}
+
+function parseSpacedProductLine(line) {
+  const trimmed = String(line || '').trim().replace(/\s+/g, ' ');
+  const dottedMatch = trimmed.match(spacedProductRowPattern);
+
+  if (dottedMatch) {
+    const productPart = dottedMatch[1].trim();
+    const unitPrice = parseIndonesianNumber(dottedMatch[2]);
+    const qty = Number.parseInt(dottedMatch[3], 10) || 1;
+    const lineTotal = parseIndonesianNumber(dottedMatch[4]);
+
+    if (!validateSpacedPriceRow({ productPart, unitPrice, qty, lineTotal })) {
+      return null;
+    }
+
+    return { productPart, qty };
+  }
+
+  const ocrMatch = trimmed.match(spacedProductRowOcrPattern);
+  if (!ocrMatch) {
+    return null;
+  }
+
+  const productPart = ocrMatch[1].trim();
+  const unitPrice = parsePlainNumber(ocrMatch[2]);
+  const qty = Number.parseInt(ocrMatch[3], 10) || 1;
+  const lineTotal = parsePlainNumber(ocrMatch[4]);
+
+  if (!validateSpacedPriceRow({ productPart, unitPrice, qty, lineTotal })) {
+    return null;
+  }
+
+  return { productPart, qty };
+}
+
+function parseUkuranLine(line) {
+  const match = String(line || '').trim().match(/^Ukuran\s*[-—=]+\s*(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function isProductContinuationLine(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed) return false;
+  if (/^Finishing\s*:/i.test(trimmed) || /^Nama\s+File\s*:/i.test(trimmed)) return false;
+  if (/^Ukuran\s*[-—=]/i.test(trimmed)) return false;
+  if (isMashedPriceLine(trimmed) || parseSpacedProductLine(trimmed) || splitEmbeddedPriceLine(trimmed)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isOrphanContinuationItem(item) {
+  if (!item?.product_type) {
+    return true;
+  }
+
+  if (item.size_text || item.finishing_text) {
+    return false;
+  }
+
+  const text = item.product_type.toLowerCase();
+  if (/finisng|flexsi|@\s*\d|imbr|uk\s*\d|cutting|masing|chromo/i.test(text)) {
+    return true;
+  }
+
+  return item.qty === 1 && !item.file_name_hint && text.length > 36;
+}
+
+function mergeOrphanContinuationItems(items) {
+  const merged = [];
+
+  for (const item of items) {
+    if (isOrphanContinuationItem(item) && merged.length > 0) {
+      const previous = merged[merged.length - 1];
+      const extra = item.product_type?.trim();
+      if (extra) {
+        previous.file_name_hint = previous.file_name_hint
+          ? `${previous.file_name_hint} ${extra}`
+          : extra;
+      }
+      if (item.file_name_hint) {
+        previous.file_name_hint = previous.file_name_hint
+          ? `${previous.file_name_hint} ${item.file_name_hint}`
+          : item.file_name_hint;
+      }
+      continue;
+    }
+
+    merged.push({ ...item });
+  }
+
+  return merged.map((item, index) => ({
+    ...item,
+    line_index: index + 1
+  }));
 }
 
 function splitEmbeddedPriceLine(line) {
@@ -245,6 +333,11 @@ function extractItems(section) {
       qty = spacedRow.qty;
       priceHandled = true;
       index += 1;
+
+      while (index < lines.length && isProductContinuationLine(lines[index])) {
+        productLines.push(lines[index]);
+        index += 1;
+      }
     }
 
     while (
@@ -288,8 +381,9 @@ function extractItems(section) {
       && !splitEmbeddedPriceLine(lines[index])
       && !parseSpacedProductLine(lines[index])
     ) {
-      if (/^Ukuran\s*=/i.test(lines[index])) {
-        sizeText = lines[index].replace(/^Ukuran\s*=\s*/i, '').trim();
+      const ukuranValue = parseUkuranLine(lines[index]);
+      if (ukuranValue) {
+        sizeText = ukuranValue;
       } else if (
         isFinishingDetailLine(lines[index])
         || (
@@ -353,7 +447,7 @@ function extractItems(section) {
     });
   }
 
-  return items;
+  return mergeOrphanContinuationItems(items);
 }
 
 export function parseNotaText(rawText) {

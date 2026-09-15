@@ -54,7 +54,7 @@ export function repairNotaExtractedText(rawText) {
     .replace(/(Kasir\s*:)/gi, '\n$1')
     .replace(/(Keterangan\s*:)/gi, '\n$1')
     .replace(/(Nama\s+File\s*:)/gi, '\n$1')
-    .replace(/(Ukuran\s*=)/gi, '\n$1')
+    .replace(/(Ukuran\s*[-—=])/gi, '\nUkuran = ')
     .replace(/(Finishing\s*:)/gi, '\n$1')
     .replace(/(Laminating\s*:)/gi, '\n$1')
     .replace(/(Total\s*:)/gi, '\n$1')

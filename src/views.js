@@ -322,7 +322,6 @@ function userBar(username) {
   return `
     <div class="user-bar">
       <span>${escapeHtml(username)}</span>
-      <a class="secondary-button small-button" href="/settings/totp">Authenticator</a>
       <form method="post" action="/logout" class="logout-form">
         <button type="submit" class="secondary-button small-button">Logout</button>
       </form>
@@ -507,6 +506,22 @@ export function orderFormView({ error = '', notice = '', orders = [], maxFileMb 
                     <strong id="preview-item-count">-</strong>
                   </div>
                 </div>
+                <div class="nota-manual-controls">
+                  <label class="field count-field-inline">
+                    <strong>Jumlah item</strong>
+                    <input
+                      id="item-count-visible"
+                      type="number"
+                      min="1"
+                      max="${maxItems}"
+                      value="1"
+                      inputmode="numeric"
+                    >
+                  </label>
+                  <button type="button" id="add-item-btn" class="secondary-button small-button">+ Tambah item</button>
+                  <button type="button" id="apply-item-count-btn" class="secondary-button small-button">Terapkan</button>
+                </div>
+                <p id="nota-manual-hint" class="nota-manual-hint hidden">OCR kurang yakin — Anda bisa ubah jumlah item dan label manual.</p>
                 <input id="item-count" type="hidden" name="item_count" value="1">
               </div>
 

@@ -166,7 +166,7 @@ app.post('/login', async (request, response) => {
       return;
     }
 
-    if (!user.totp_enabled) {
+    if (config.auth.requireTotp && !user.totp_enabled) {
       const secret = generateTotpSecret(user.username);
       request.session.pendingUserId = user.id;
       request.session.pendingUsername = user.username;
@@ -182,9 +182,15 @@ app.post('/login', async (request, response) => {
       return;
     }
 
-    request.session.pendingUserId = user.id;
-    request.session.pendingUsername = user.username;
-    response.redirect(`/login?step=totp&username=${encodeURIComponent(user.username)}`);
+    if (config.auth.requireTotp) {
+      request.session.pendingUserId = user.id;
+      request.session.pendingUsername = user.username;
+      response.redirect(`/login?step=totp&username=${encodeURIComponent(user.username)}`);
+      return;
+    }
+
+    establishSession(request, user);
+    response.redirect('/');
   } catch (error) {
     response.redirect(`/login?error=${encodeURIComponent(error.message)}`);
   }

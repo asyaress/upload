@@ -9,6 +9,10 @@ const submitBtn = document.querySelector('#submit-btn');
 const previewNotaOrderCode = document.querySelector('#preview-nota-order-code');
 const previewNotaDate = document.querySelector('#preview-nota-date');
 const previewItemCount = document.querySelector('#preview-item-count');
+const itemCountVisible = document.querySelector('#item-count-visible');
+const addItemBtn = document.querySelector('#add-item-btn');
+const applyItemCountBtn = document.querySelector('#apply-item-count-btn');
+const notaManualHint = document.querySelector('#nota-manual-hint');
 const flowStepper = document.querySelector('#flow-stepper');
 const uploadReadiness = document.querySelector('#upload-readiness');
 const uploadReadinessCount = document.querySelector('#upload-readiness-count');
@@ -255,7 +259,8 @@ function countSelectedDesignFiles() {
 }
 
 function updateUploadReadiness() {
-  const requiredDesigns = notaPreview?.itemCount
+  const requiredDesigns = Number.parseInt(itemCountInput?.value, 10)
+    || notaPreview?.itemCount
     || Number.parseInt(itemCountInput?.value, 10)
     || 0;
   const selectedDesigns = countSelectedDesignFiles();
@@ -336,14 +341,60 @@ function buildItemInfoHtml(item) {
   `;
 }
 
+function getMaxItemsLimit() {
+  return Number.parseInt(orderForm?.dataset.maxItems, 10) || 50;
+}
+
+function buildManualItems(count, existingItems = []) {
+  const items = [];
+
+  for (let index = 1; index <= count; index += 1) {
+    const existing = existingItems[index - 1];
+    items.push({
+      lineIndex: index,
+      productType: existing?.productType || existing?.product_type || `Item ${index}`,
+      qty: existing?.qty || 1,
+      sizeText: existing?.sizeText || existing?.size_text || null,
+      finishingText: existing?.finishingText || existing?.finishing_text || null,
+      fileNameHint: existing?.fileNameHint || existing?.file_name_hint || null
+    });
+  }
+
+  return items;
+}
+
+function syncItemCountUi(count) {
+  const safeCount = Math.min(Math.max(count, 1), getMaxItemsLimit());
+  if (itemCountInput) itemCountInput.value = String(safeCount);
+  if (itemCountVisible) itemCountVisible.value = String(safeCount);
+  if (previewItemCount) previewItemCount.textContent = String(safeCount);
+  return safeCount;
+}
+
+function applyManualItemCount(requestedCount) {
+  const safeCount = syncItemCountUi(requestedCount);
+  const baseItems = notaPreview?.items || [];
+  const items = buildManualItems(safeCount, baseItems);
+
+  notaPreview = {
+    ...(notaPreview || {}),
+    itemCount: safeCount,
+    items,
+    manual: true
+  };
+
+  renderDesignFields(items);
+  updateUploadReadiness();
+}
+
 function renderDesignFields(items = []) {
   if (!itemCountInput || !designFields) return;
 
-  const maxItems = Number.parseInt(orderForm?.dataset.maxItems, 10) || 50;
+  const maxItems = getMaxItemsLimit();
   const count = items.length || Number.parseInt(itemCountInput.value, 10) || 1;
   const safeCount = Math.min(Math.max(count, 1), maxItems);
 
-  itemCountInput.value = String(safeCount);
+  syncItemCountUi(safeCount);
   designFields.innerHTML = '';
 
   for (let itemIndex = 1; itemIndex <= safeCount; itemIndex += 1) {
@@ -353,6 +404,16 @@ function renderDesignFields(items = []) {
 
     row.innerHTML = `
       ${buildItemInfoHtml(item ? { ...item, lineIndex: item.lineIndex || itemIndex } : { lineIndex: itemIndex })}
+      <label class="field design-label-field">
+        <strong>Label item (opsional)</strong>
+        <input
+          type="text"
+          class="design-label-input"
+          data-item-index="${itemIndex}"
+          value="${escapeHtml(item?.productType || `Item ${itemIndex}`)}"
+          maxlength="255"
+        >
+      </label>
       <label class="file-drop file-drop-compact" data-field="design_${itemIndex}">
         <input type="file" name="design_${itemIndex}" accept="image/jpeg,.jpg,.jpeg" required hidden>
         <div class="file-drop-content">
@@ -364,6 +425,15 @@ function renderDesignFields(items = []) {
     `;
 
     designFields.appendChild(row);
+
+    const labelInput = row.querySelector('.design-label-input');
+    labelInput?.addEventListener('input', () => {
+      if (!notaPreview?.items?.[itemIndex - 1]) return;
+      notaPreview.items[itemIndex - 1].productType = labelInput.value.trim() || `Item ${itemIndex}`;
+      const title = row.querySelector('.design-product-title');
+      if (title) title.textContent = notaPreview.items[itemIndex - 1].productType;
+    });
+
     const dropEl = row.querySelector('.file-drop');
     const statusPill = row.querySelector('.design-status-pill');
 
@@ -427,6 +497,26 @@ async function scanNotaFile(file) {
     if (requestId !== notaScanRequestId) return;
 
     notaPreview = data;
+
+    if (data.needsManual || !data.itemCount) {
+      notaPreview = {
+        ...data,
+        itemCount: 1,
+        items: buildManualItems(1),
+        manual: true
+      };
+      if (notaManualHint) notaManualHint.classList.remove('hidden');
+      updateNotaSummary({ ...data, itemCount: 1 });
+      applyManualItemCount(1);
+      showAutoUploadSection();
+      setNotaScanStatus(
+        'error',
+        `${escapeHtml(data.warning || 'Nota tidak terbaca penuh.')} Atur jumlah item manual di bawah.`
+      );
+      return;
+    }
+
+    if (notaManualHint) notaManualHint.classList.add('hidden');
     updateNotaSummary(data);
     renderDesignFields(data.items || []);
     showAutoUploadSection();
@@ -438,10 +528,39 @@ async function scanNotaFile(file) {
   } catch (error) {
     if (requestId !== notaScanRequestId) return;
 
-    resetNotaWorkflow();
-    setNotaScanStatus('error', escapeHtml(error.message));
+    notaPreview = {
+      itemCount: 1,
+      items: buildManualItems(1),
+      manual: true,
+      ocrFailed: true
+    };
+    if (notaManualHint) notaManualHint.classList.remove('hidden');
+    applyManualItemCount(1);
+    showAutoUploadSection();
+    setFlowStep(2);
+    setNotaScanStatus('error', `${escapeHtml(error.message)} Lanjutkan dengan pengaturan manual item.`);
   }
 }
+
+function setupManualItemControls() {
+  applyItemCountBtn?.addEventListener('click', () => {
+    const value = Number.parseInt(itemCountVisible?.value, 10) || 1;
+    applyManualItemCount(value);
+  });
+
+  addItemBtn?.addEventListener('click', () => {
+    const current = Number.parseInt(itemCountVisible?.value, 10)
+      || Number.parseInt(itemCountInput?.value, 10)
+      || 1;
+    applyManualItemCount(current + 1);
+  });
+
+  itemCountVisible?.addEventListener('change', () => {
+    applyManualItemCount(Number.parseInt(itemCountVisible.value, 10) || 1);
+  });
+}
+
+setupManualItemControls();
 
 function setupNotaDrop() {
   const notaDrop = document.querySelector('#nota-drop');
@@ -533,13 +652,13 @@ function validateForm(formData) {
     errors.push('Nota PDF wajib diupload.');
   }
 
-  if (!notaPreview?.itemCount) {
-    errors.push('Tunggu sampai nota selesai dibaca sebelum upload design.');
+  const itemCount = Number.parseInt(formData.get('item_count'), 10) || 0;
+  if (!itemCount || itemCount < 1) {
+    errors.push('Jumlah item wajib diisi minimal 1.');
   }
 
-  const itemCount = Number.parseInt(formData.get('item_count'), 10) || 0;
-  if (notaPreview && itemCount !== notaPreview.itemCount) {
-    errors.push(`Jumlah design (${itemCount}) tidak sesuai nota (${notaPreview.itemCount} item).`);
+  if (!notaPreview && itemCount < 1) {
+    errors.push('Upload nota atau atur jumlah item manual sebelum upload design.');
   }
   for (let i = 1; i <= itemCount; i += 1) {
     const design = formData.get(`design_${i}`);

@@ -27,7 +27,7 @@ export async function bootstrapAdminUser() {
     passwordHash
   });
 
-  console.log(`Akun admin "${config.auth.adminUsername}" dibuat. Login lalu setup TOTP.`);
+  console.log(`Akun admin "${config.auth.adminUsername}" dibuat. Login dengan password.`);
 }
 
 export async function verifyPassword(username, password) {

@@ -1160,6 +1160,33 @@ body.upload-active {
   letter-spacing: -0.03em;
 }
 
+.nota-manual-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.count-field-inline {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+
+.nota-manual-hint {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.design-label-field {
+  margin-top: 10px;
+}
+
+.design-label-field input {
+  width: 100%;
+}
+
 .design-card {
   padding: 16px;
   border-radius: var(--radius-sm);
