@@ -97,6 +97,30 @@ test('repairNotaExtractedText keeps product size tokens like A3 intact', async (
   assert.equal(parsed.items[0].product_type, 'Laminating A3');
 });
 
+const SERLI_RESELLER_NOTA = `
+Kode Order : ON202609150026 15-09-2026 07:19
+Kepada + Serli Desain
+Kasir : Sandra Widiya
+Produk Harga Qty Total
+Mug Putih 18.000 2 36.000
+Finishing :
+Tambah Kotak Mug: Kotak Mug
+Nama File : serli 1 mug.cdr
+Total: 36.000
+`;
+
+test('parseNotaText reads spaced product rows from OCR nota', () => {
+  const parsed = parseNotaText(SERLI_RESELLER_NOTA);
+
+  assert.equal(parsed.item_count_detected, 1);
+  assert.equal(parsed.nota_order_code, 'ON202609150026');
+  assert.equal(parsed.items[0].product_type, 'Mug Putih');
+  assert.equal(parsed.items[0].qty, 2);
+  assert.match(parsed.items[0].finishing_text || '', /Kotak Mug/i);
+  assert.equal(parsed.items[0].file_name_hint, 'serli 1 mug.cdr');
+  assert.ok(parsed.customer_anon_id);
+});
+
 test('Downloads Cetak Label.pdf when present', async (t) => {
   const pdfPath = 'd:/Downloads/nota/Cetak Label.pdf';
 

@@ -93,6 +93,37 @@ function extractMashedPriceSuffix(line) {
   return matches[0];
 }
 
+const spacedProductRowPattern = /^(.+?)\s+(\d{1,3}(?:\.\d{3})+)\s+(\d{1,4})\s+(\d{1,3}(?:\.\d{3})+)$/;
+
+function parseSpacedProductLine(line) {
+  const trimmed = String(line || '').trim();
+  const match = trimmed.match(spacedProductRowPattern);
+  if (!match) {
+    return null;
+  }
+
+  const productPart = match[1].trim();
+  const unitPrice = parseIndonesianNumber(match[2]);
+  const qty = Number.parseInt(match[3], 10) || 1;
+  const lineTotal = parseIndonesianNumber(match[4]);
+
+  if (!productPart || !/[A-Za-z]/.test(productPart) || unitPrice < 1000) {
+    return null;
+  }
+
+  if (lineTotal > 0 && unitPrice > 0) {
+    const impliedQty = Math.max(1, Math.round(lineTotal / unitPrice));
+    if (Math.abs(impliedQty - qty) > 1) {
+      return null;
+    }
+  }
+
+  return {
+    productPart,
+    qty
+  };
+}
+
 function splitEmbeddedPriceLine(line) {
   const trimmed = line.trim();
   const mashedSuffix = extractMashedPriceSuffix(trimmed);
@@ -118,7 +149,11 @@ function splitEmbeddedPriceLine(line) {
 
 function isHeaderOrFooterLine(line) {
   return /^(www\.|Scan QR|Nota Digital|TERIMA KASIH|Silakan Order|Head Office|LUNAS$|"--\s+\d+)/i.test(line)
-    || /^"Head Office/i.test(line);
+    || /^"Head Office/i.test(line)
+    || /^Cetak Label/i.test(line)
+    || /workflow_payment|print_nota|hitps:/i.test(line)
+    || /^TOEDJ/i.test(line)
+    || /^SINAR\s+GAD/i.test(line);
 }
 
 function isFileNameContinuationLine(line) {
@@ -150,7 +185,7 @@ function looksLikeNewProductBlock(lines, startIndex, maxLookahead = 5) {
     if (/^Nama\s+File\s*:/i.test(line) || /^Ukuran\s*=/i.test(line)) {
       return false;
     }
-    if (isMashedPriceLine(line)) {
+    if (isMashedPriceLine(line) || parseSpacedProductLine(line)) {
       return true;
     }
   }
@@ -173,7 +208,7 @@ export function countNotaPriceAnchors(rawText) {
   let anchors = 0;
 
   for (const line of lines) {
-    if (isMashedPriceLine(line) || splitEmbeddedPriceLine(line)) {
+    if (isMashedPriceLine(line) || splitEmbeddedPriceLine(line) || parseSpacedProductLine(line)) {
       anchors += 1;
     }
   }
@@ -204,9 +239,19 @@ function extractItems(section) {
     let qty = 1;
     let priceHandled = false;
 
+    const spacedRow = parseSpacedProductLine(lines[index]);
+    if (spacedRow) {
+      productLines.push(spacedRow.productPart);
+      qty = spacedRow.qty;
+      priceHandled = true;
+      index += 1;
+    }
+
     while (
-      index < lines.length
+      !priceHandled
+      && index < lines.length
       && !isMashedPriceLine(lines[index])
+      && !parseSpacedProductLine(lines[index])
       && !/^Nama\s+File\s*:/i.test(lines[index])
       && !/^Total\s*:/i.test(lines[index])
     ) {
@@ -241,10 +286,17 @@ function extractItems(section) {
       && !/^Nama\s+File\s*:/i.test(lines[index])
       && !/^Total\s*:/i.test(lines[index])
       && !splitEmbeddedPriceLine(lines[index])
+      && !parseSpacedProductLine(lines[index])
     ) {
       if (/^Ukuran\s*=/i.test(lines[index])) {
         sizeText = lines[index].replace(/^Ukuran\s*=\s*/i, '').trim();
-      } else if (isFinishingDetailLine(lines[index])) {
+      } else if (
+        isFinishingDetailLine(lines[index])
+        || (
+          finishingParts.length > 0
+          && !/^Nama\s+File\s*:/i.test(lines[index])
+        )
+      ) {
         finishingParts.push(lines[index].replace(/\s+/g, ' ').trim());
       }
       index += 1;
@@ -267,6 +319,7 @@ function extractItems(section) {
           || /^Laminating:/i.test(continuationLine)
           || isMashedPriceLine(continuationLine)
           || splitEmbeddedPriceLine(continuationLine)
+          || parseSpacedProductLine(continuationLine)
         ) {
           break;
         }
@@ -306,9 +359,9 @@ function extractItems(section) {
 export function parseNotaText(rawText) {
   const normalized = normalizeNotaText(rawText);
 
-  const orderMatch = normalized.match(/Kode\s*Order\s*:\s*(ON\d+)-(\d{2}-\d{2}-\d{4})/i)
+  const orderMatch = normalized.match(/Kode\s*Order\s*:\s*(ON\d+)\s*[-\s]+(\d{2}-\d{2}-\d{4})/i)
     || normalized.match(/Kode\s*Order\s*:\s*(ON\d+)/i);
-  const customerMatch = normalized.match(/Kepada\s*:\s*(.+?)(?:\n|Kasir|Keterangan|$)/i);
+  const customerMatch = normalized.match(/Kepada\s*[+:]\s*(.+?)(?:\n|Kasir|Keterangan|$)/i);
   const notaDate = orderMatch?.[2]
     ? parseNotaDate(orderMatch[2])
     : parseNotaDate(normalized.match(/(\d{2}-\d{2}-\d{4})/)?.[1]);

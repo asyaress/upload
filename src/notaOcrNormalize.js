@@ -50,7 +50,7 @@ export function repairNotaExtractedText(rawText) {
 
   text = text
     .replace(/(Kode\s*Order\s*:)/gi, '\n$1')
-    .replace(/(Kepada\s*:)/gi, '\n$1')
+    .replace(/(Kepada\s*[+:])/gi, '\n$1')
     .replace(/(Kasir\s*:)/gi, '\n$1')
     .replace(/(Keterangan\s*:)/gi, '\n$1')
     .replace(/(Nama\s+File\s*:)/gi, '\n$1')
@@ -60,6 +60,7 @@ export function repairNotaExtractedText(rawText) {
     .replace(/(Total\s*:)/gi, '\n$1')
     .replace(/(Bayar\s*:)/gi, '\n$1')
     .replace(/(Kurang\s*:)/gi, '\n$1')
+    .replace(/Produk\s+Harga\s+Qty\s+Total/gi, '\nProdukHargaQtyTotal\n')
     .replace(/ProdukHargaQtyTotal/gi, '\nProdukHargaQtyTotal\n');
 
   text = text
